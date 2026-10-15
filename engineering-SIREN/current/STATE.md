@@ -43,8 +43,10 @@ at short depth. Smoke numbers, one run each.
 | # | step | status |
 |---|---|---|
 | 0 | MVP: pinned mainline llama.cpp Vulkan build + server on AUX-1, best mainline config, recorded | DONE 2026-10-15 (`scripts/serve.sh`, `scripts/smoke_api.py` ALL PASS) |
-| 1 | (NEXT) Fast upload path: CPU writes into the 8 GB BAR / pinned batched copies; measure GB/s vs 15.75 | |
-| 2 | Hybrid expert execution (Strata): GPU computes cached experts, CPU computes misses in the same instant, PCIe share for a fraction | |
+| 1 | Fast upload path: measured (11.2 GB/s batched DMA; BAR writes 7.9); ggml-vulkan async staging ring | DONE 2026-10-15 |
+| 2a | Hybrid expert execution, serial (GPU hits + CPU misses, adaptive LFU cache) | DONE, correct, no speed gain yet (GPU half is the bottleneck) |
+| 2b | (NEXT) gfx803 GPU decode efficiency: fuse MoE add chain, small-matvec tuning, router; target GPU 25 -> ~10 ms/token | |
+| 2c | Overlap CPU misses with GPU hits; tune swap churn | |
 | 3 | Prefill expert streaming per layer with large ubatch (BELLS staging done right) | |
 | 4 | MTP speculative decoding with rejection sampling | |
 | 5 | KVarN KV cache on gfx803 (Vulkan) | |
@@ -52,6 +54,11 @@ at short depth. Smoke numbers, one run each.
 | 7 | Sparse attention for decode (Quest-style) and prefill (XAttention-style), KLD-gated | |
 | 8 | Second RX 580: layer split with resident experts | waiting for hardware |
 | 9 | CPU kernels for missed experts (ik_llama iqk / Strata AVX2) | |
+
+## Decode cost model (measured 2026-10-15, b=1, IQ4_NL)
+
+GPU op time ~25 ms/token with no experts on the GPU (should be ~8 ms). CPU experts (all 40 layers) + syncs
+~25 ms. Hybrid at 76% GPU hits: same total, because the GPU half got slower by what the CPU half saved.
 
 ## Open questions
 
