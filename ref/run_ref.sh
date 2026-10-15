@@ -99,8 +99,9 @@ wait_for() {  # wait_for STAGE [timeout_s]
   local s=$1 to=${2:-36000} t=0
   while ! done_mark "$s"; do
     [ -f "$STATE/$s.failed" ] && { echo "dependency $s failed"; return 1; }
-    sleep 20; t=$((t + 20)); [ $t -ge $to ] && { echo "timeout waiting for $s"; return 1; }
+    sleep 20; t=$((t + 20)); [ $t -lt $to ] || { echo "timeout waiting for $s"; return 1; }
   done
+  return 0   # a while loop returns its last body command's status: never let that leak under errexit
 }
 
 py() { "$VENV/bin/python" "$@"; }
@@ -291,7 +292,7 @@ st_chat() {
   local t=0
   until curl -sf "http://127.0.0.1:$SERVER_PORT/health" | grep -q ok; do
     sleep 5; t=$((t + 5)); kill -0 $spid || { echo "server died"; tail -50 "$LOGS/chat-server.log"; return 1; }
-    [ $t -ge 900 ] && { echo "server not ready"; return 1; }
+    [ $t -lt 900 ] || { echo "server not ready"; return 1; }
   done
   py "$TOOLS/gen_chat.py" --hf-dir "$HF" --prompts "$PROMPTS" --out "$CORP" --server "http://127.0.0.1:$SERVER_PORT" --parallel 4
   kill $spid; wait $spid 2>/dev/null || true
