@@ -30,12 +30,20 @@ Targets (dev box AUX-1; see README for the table):
 - Bus: host-to-device 6.8 / 7.9 GB/s (pageable / pinned) through ggml-vulkan, on a PCIe 3.0 x16
   link (15.75 GB/s theoretical). Same as with DPM off: the bus limit is the copy path, not clocks.
 
+## MVP (2026-10-15)
+
+`scripts/serve.sh`: engine fork 942a676f0+ (mainline b76b13379, Vulkan), Qwen3.6-35B IQ4_NL, 262,144 context,
+q8_0 KV, `-ncmoe 34`, flash attention, `--jinja`. `scripts/smoke_api.py` ALL PASS: chat via the model's
+template, tool call parsed into `tool_calls` (finish_reason tool_calls), prefix cache reused
+(6,689-token prompt -> 23 new tokens, 49.5 s -> 1.4 s). Prefill 137 t/s (6.7k tokens), decode 18.8-21.4 t/s
+at short depth. Smoke numbers, one run each.
+
 ## Plan (one feature at a time, KLD gate before speed claims)
 
 | # | step | status |
 |---|---|---|
-| 0 | MVP: pinned mainline llama.cpp Vulkan build + server on AUX-1, best mainline config, recorded | NEXT |
-| 1 | Fast upload path: CPU writes into the 8 GB BAR / pinned batched copies; measure GB/s vs 15.75 | |
+| 0 | MVP: pinned mainline llama.cpp Vulkan build + server on AUX-1, best mainline config, recorded | DONE 2026-10-15 (`scripts/serve.sh`, `scripts/smoke_api.py` ALL PASS) |
+| 1 | (NEXT) Fast upload path: CPU writes into the 8 GB BAR / pinned batched copies; measure GB/s vs 15.75 | |
 | 2 | Hybrid expert execution (Strata): GPU computes cached experts, CPU computes misses in the same instant, PCIe share for a fraction | |
 | 3 | Prefill expert streaming per layer with large ubatch (BELLS staging done right) | |
 | 4 | MTP speculative decoding with rejection sampling | |

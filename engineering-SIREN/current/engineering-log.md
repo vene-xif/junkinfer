@@ -26,3 +26,19 @@ Bugs found in review before launch: errexit is ignored inside a subshell used as
 condition (stage failures would have been invisible); a preflight check could `exit` the main
 shell; a `RETURN` trap would not have stopped the BF16 server on error; `grep -q` + `pipefail`
 false negative on a large curl response. All fixed before the run.
+
+## 2026-10-15 — reference-tool findings (VENE) and MVP (AUX-1)
+
+**Implementation noise floor** (junk-ref on Qwen3.6-35B UD-IQ4_NL, 2 wiki rows, RTX 3090):
+- same path twice: KL 0.0, top-1 100% (deterministic).
+- standard (fused top-k) vs graph split at the routing tensors (unfused): KL 0.0053, top-1 97.1%.
+- each CUDA path vs the CPU backend: KL 0.0088 / 0.0090, top-1 97.0% / 96.2%.
+- Decision: reference logits come from the standard path; routing traces from a separate pass
+  (stage `routes`). Quality gates must be read against this floor: two correct implementations of
+  the same quantized model differ by ~0.005-0.009 KL.
+- Also: llama.cpp runs the last layer only on output tokens (`inp_out_ids`), so a routing trace
+  must make every token an output.
+
+**MVP on AUX-1** (engine fork, Vulkan, smoke, 1 run): `scripts/serve.sh` + `scripts/smoke_api.py` ALL PASS
+(chat, tool call parsing, prefix cache 49.5 s -> 1.4 s). 262k context + q8_0 KV fits with `-ncmoe 34`
+or 36 (decode 21.4 / 20.7 t/s at short depth).
