@@ -1,0 +1,88 @@
+#version 450
+// y = W x for IQ4_NL weights repacked for GCN: per row, K/32 chunks of 16 bytes (32 nibbles) stored
+// contiguously as uvec4, scales in a separate float array (one per chunk).
+// One workgroup = one wave (64 lanes). L = lanes per row (= min(64, K/32)), P = 64/L rows per pass,
+// REP passes per workgroup. Each lane keeps its x chunks in registers and reuses them for all rows.
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_clustered : require
+
+layout(local_size_x = 64) in;
+layout(constant_id = 0) const uint L   = 64;  // lanes per row (power of two, <= 64)
+layout(constant_id = 1) const uint CPL = 1;   // chunks per lane (K/32/L)
+layout(constant_id = 2) const uint REP = 4;   // passes per workgroup
+
+layout(std430, binding = 0) readonly buffer WQ { uvec4 wq[]; };
+layout(std430, binding = 1) readonly buffer WS { float ws[]; };
+layout(std430, binding = 2) readonly buffer X  { vec4 x[]; };
+layout(std430, binding = 3) writeonly buffer Y { float y[]; };
+
+layout(push_constant) uniform PC { uint M; uint K; uint mat_off_q; uint mat_off_s; } pc;
+
+const float kv[16] = float[16](-127., -104., -83., -65., -49., -35., -22., -10., 1., 13., 25., 38., 53., 69., 89., 113.);
+#ifndef MODE
+#define MODE 0
+#endif
+// MODE 0: register/const table, 1: LDS table, 2: linear 4-bit (q - 8), 3: raw bytes (bandwidth bound only)
+shared float lds_kv[16];
+float lut(uint q) {
+#if MODE == 1
+    return lds_kv[q];
+#elif MODE == 2
+    return float(int(q) - 8);
+#else
+    return kv[q];
+#endif
+}
+
+void main() {
+    const uint t    = gl_LocalInvocationID.x;
+    const uint lane = t % L;
+    const uint sub  = t / L;
+    const uint P    = 64 / L;
+    const uint nchunk = pc.K / 32;
+
+#if MODE == 1
+    if (t < 16) lds_kv[t] = kv[t];
+    barrier();
+#endif
+    // x chunks for this lane: chunk c = lane + j*L, 32 floats = 8 vec4
+    vec4 xr[CPL * 8];
+    for (uint j = 0; j < CPL; ++j) {
+        const uint c = lane + j * L;
+        for (uint v = 0; v < 8; ++v) xr[j * 8 + v] = x[c * 8 + v];
+    }
+
+    for (uint r = 0; r < REP; ++r) {
+        const uint row = (gl_WorkGroupID.x * REP + r) * P + sub;
+        float acc = 0.0;
+        if (row < pc.M) {
+            for (uint j = 0; j < CPL; ++j) {
+                const uint c = lane + j * L;
+                const uvec4 q = wq[pc.mat_off_q + row * nchunk + c];
+                const float d = ws[pc.mat_off_s + row * nchunk + c];
+                float s = 0.0;
+                // byte b of the 16: low nibble -> weight b, high nibble -> weight b+16
+#if MODE == 3
+                s = float(q.x ^ q.y ^ q.z ^ q.w) * xr[j * 8].x;
+#else
+                for (uint w = 0; w < 4; ++w) {
+                    const uint word = q[w];
+                    for (uint bb = 0; bb < 4; ++bb) {
+                        const uint b = w * 4 + bb;
+                        const uint byt = (word >> (8 * bb)) & 0xFFu;
+                        const float lo = lut(byt & 15u);
+                        const float hi = lut(byt >> 4);
+                        s += lo * xr[j * 8 + b / 4][b % 4] + hi * xr[j * 8 + 4 + b / 4][b % 4];
+                    }
+                }
+#endif
+                acc += d * s;
+            }
+        }
+        if (L == 64)      acc = subgroupClusteredAdd(acc, 64);
+        else if (L == 32) acc = subgroupClusteredAdd(acc, 32);
+        else if (L == 16) acc = subgroupClusteredAdd(acc, 16);
+        else              acc = subgroupClusteredAdd(acc, 8);
+        if (lane == 0 && row < pc.M) y[row] = acc;
+    }
+}

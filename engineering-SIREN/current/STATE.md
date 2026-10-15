@@ -45,7 +45,8 @@ at short depth. Smoke numbers, one run each.
 | 0 | MVP: pinned mainline llama.cpp Vulkan build + server on AUX-1, best mainline config, recorded | DONE 2026-10-15 (`scripts/serve.sh`, `scripts/smoke_api.py` ALL PASS) |
 | 1 | Fast upload path: measured (11.2 GB/s batched DMA; BAR writes 7.9); ggml-vulkan async staging ring | DONE 2026-10-15 |
 | 2a | Hybrid expert execution, serial (GPU hits + CPU misses, adaptive LFU cache) | DONE, correct, no speed gain yet (GPU half is the bottleneck) |
-| 2b | (NEXT) gfx803 GPU decode efficiency: fuse MoE add chain, small-matvec tuning, router; target GPU 25 -> ~10 ms/token | |
+| 2b | gfx803 decode efficiency: measured (ggml: ~1,500 dependent dispatches x 7-10 us bubbles, matvecs at 10-108 GB/s); GCN matvec in LDS reaches 192-229 GB/s | DONE (diagnosis + kernel lab) |
+| 3 | (NEXT) Decode engine JDE (`decode-engine.md`): native-layout kernels, doorbell CPU overlap, replayed command buffers | |
 | 2c | Overlap CPU misses with GPU hits; tune swap churn | |
 | 3 | Prefill expert streaming per layer with large ubatch (BELLS staging done right) | |
 | 4 | MTP speculative decoding with rejection sampling | |

@@ -1,0 +1,72 @@
+#version 450
+// y = W x for IQ4_NL in the NATIVE GGUF layout: per row, K/32 blocks of 18 bytes (fp16 d + 16 nibble bytes,
+// low nibble = weight i, high nibble = weight i+16). Rows are 16-byte aligned (K/32*18 % 16 == 0 for K % 256 == 0).
+// A workgroup (one wave) stages REP*P whole rows into LDS with 16-byte loads, then each lane decodes its blocks.
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_clustered : require
+
+layout(local_size_x = 64) in;
+layout(constant_id = 0) const uint L   = 64;  // lanes per row
+layout(constant_id = 1) const uint CPL = 1;   // blocks per lane
+layout(constant_id = 2) const uint REP = 4;   // passes per workgroup
+layout(constant_id = 3) const uint K   = 2048;
+
+const uint P         = 64 / L;
+const uint ROWS      = REP * P;
+const uint ROW_BYTES = K / 32 * 18;
+const uint ROW_U4    = ROW_BYTES / 16;
+
+layout(std430, binding = 0) readonly buffer WQ { uvec4 wq[]; };
+layout(std430, binding = 2) readonly buffer X  { vec4 x[]; };
+layout(std430, binding = 3) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform PC { uint M; uint Kpc; uint mat_off_u4; uint unused; } pc;
+
+shared uint  lds[ROWS * ROW_BYTES / 4];
+shared float lds_kv[16];
+const float kv[16] = float[16](-127., -104., -83., -65., -49., -35., -22., -10., 1., 13., 25., 38., 53., 69., 89., 113.);
+
+uint byte_at(uint off) { return (lds[off >> 2] >> ((off & 3u) * 8u)) & 0xFFu; }
+
+void main() {
+    const uint t = gl_LocalInvocationID.x;
+    const uint lane = t % L;
+    const uint sub = t / L;
+    if (t < 16) lds_kv[t] = kv[t];
+
+    const uint row0 = gl_WorkGroupID.x * ROWS;
+    // stage ROWS rows: ROWS*ROW_U4 uvec4 loads spread over 64 lanes (rows are contiguous in memory)
+    const uint base_u4 = pc.mat_off_u4 + row0 * ROW_U4;
+    for (uint i = t; i < ROWS * ROW_U4; i += 64) {
+        const uvec4 v = (row0 + i / ROW_U4 < pc.M) ? wq[base_u4 + i] : uvec4(0);
+        lds[i * 4 + 0] = v.x; lds[i * 4 + 1] = v.y; lds[i * 4 + 2] = v.z; lds[i * 4 + 3] = v.w;
+    }
+
+    vec4 xr[CPL * 8];
+    for (uint j = 0; j < CPL; ++j) {
+        const uint c = lane + j * L;
+        for (uint v = 0; v < 8; ++v) xr[j * 8 + v] = x[c * 8 + v];
+    }
+    barrier();
+
+    for (uint r = 0; r < REP; ++r) {
+        const uint rl = r * P + sub;            // row within the staged group
+        const uint row = row0 + rl;
+        float acc = 0.0;
+        for (uint j = 0; j < CPL; ++j) {
+            const uint c = lane + j * L;
+            const uint boff = rl * ROW_BYTES + c * 18;
+            const float d = unpackHalf2x16(byte_at(boff) | (byte_at(boff + 1) << 8)).x;
+            float s = 0.0;
+            for (uint b = 0; b < 16; ++b) {
+                const uint byt = byte_at(boff + 2 + b);
+                s += lds_kv[byt & 15u] * xr[j * 8 + b / 4][b % 4] + lds_kv[byt >> 4] * xr[j * 8 + 4 + b / 4][b % 4];
+            }
+            acc += d * s;
+        }
+        if (L == 64)      acc = subgroupClusteredAdd(acc, 64);
+        else if (L == 32) acc = subgroupClusteredAdd(acc, 32);
+        else if (L == 16) acc = subgroupClusteredAdd(acc, 16);
+        else              acc = subgroupClusteredAdd(acc, 8);
+        if (lane == 0 && row < pc.M) y[row] = acc;
+    }
+}

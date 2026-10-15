@@ -73,3 +73,41 @@ LFU-decay adaptation with bounded swaps per ubatch. Works: KL vs plain --cpu-moe
 **Decode levers, in order:** (1) gfx803 GPU efficiency: fusion of the MoE add chain, small-matvec work
 distribution, router precision/kernel; (2) MTP verify windows amortise exactly this per-dispatch cost;
 (3) overlap CPU misses with GPU hits once the GPU half is lean.
+
+## 2026-10-16 — where decode time goes, measured; the GCN matvec roofline is reachable
+
+**Scheduler profile** (`GGML_SCHED_PROFILE`, per decode token, b=1, IQ4_NL):
+
+| config | total | Vulkan record+submit | CPU waits GPU | CPU experts | GPU waits CPU input |
+|---|---|---|---|---|---|
+| --cpu-moe | 46.2 ms | 11.4 ms (41 splits) | 14.8 | 19.6 | 0.5 |
+| -ncmoe 34 | 43.7 ms | 11.9 ms (35 splits) | 12.5 | 18.0 | 1.3 |
+| hybrid 76% hits | 42.5 ms | 14.5 ms (81 splits) | 7.9 | 7.6 | 12.5 |
+
+`GGML_VK_HOST_PROFILE`: ~280 us host time per Vulkan split (158 us recording, 10.5 submits x 17 us); mostly
+overlapped with GPU execution. The floor is GPU execution (~23 ms) + CPU experts (~20 ms) in series.
+Hybrid: CPU 19.6 -> 7.6 ms, but GPU op time 23 -> 32 ms (MUL_MAT_ID_VEC experts at ~89 GB/s, more adds/get_rows).
+
+**Kernel lab** (`lab/matvec`, raw Vulkan, IQ4_NL repacked as 16-byte nibble chunks per lane + separate scales,
+x in registers, one wave per row group, 40-640 distinct matrices so L2 does not help):
+
+| variant | 8192x2048 | 4096x2048 | 512x2048 |
+|---|---|---|---|
+| codebook as const array (dynamic index) | 42-102 GB/s (unstable) | 42-102 | 42-102 |
+| **codebook in LDS** | **228.7 GB/s** | 225.2 | 228.9 |
+| linear 4-bit (format bound) | 228.9 | 223.8 | 227.9 |
+| raw bytes (bandwidth bound) | 225.6 | 222.5 | 226.4 |
+
+Correct vs CPU (max rel err <= 1.3e-5). **89% of the RX 580's 256 GB/s.** ggml-vulkan's IQ4_NL matvecs run
+these shapes at ~108 GB/s (large) and 10-60 GB/s (small). Also measured: a dependent dispatch (barrier
+between matvecs) costs ~7-10 us extra on Polaris (512x2048: 6.4 us back-to-back, 14-16 us with a barrier).
+ggml decode has ~1,500 dependent ops per token -> 10-15 ms of bubbles.
+
+**Decision:** decode needs a purpose-built path for qwen35moe: GCN-shaped kernels (LDS codebook), few fused
+dispatches per layer, routing via a host-visible doorbell, CPU misses overlapped with GPU hits.
+Estimated GPU time ~8-10 ms/token (vs 23-32 ms in ggml). See `current/decode-engine.md`.
+
+**Native GGUF layout through LDS** (`lab/matvec/mv_iq4_native.comp`): rows staged into LDS with 16-byte loads,
+blocks decoded from LDS. Correct on all shapes. Best per shape (REP=4 unless noted): 8192x2048 192 GB/s,
+4096x2048 191, 2048x4096 147 (REP=2), 512x2048 192, 2048x512 194. ~75% of peak, no repacked copy of the
+weights needed. Larger K stages more LDS and loses occupancy: double-buffering is the next tuning step.
