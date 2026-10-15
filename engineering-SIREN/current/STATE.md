@@ -46,7 +46,7 @@ at short depth. Smoke numbers, one run each.
 | 1 | Fast upload path: measured (11.2 GB/s batched DMA; BAR writes 7.9); ggml-vulkan async staging ring | DONE 2026-10-15 |
 | 2a | Hybrid expert execution, serial (GPU hits + CPU misses, adaptive LFU cache) | DONE, correct, no speed gain yet (GPU half is the bottleneck) |
 | 2b | gfx803 decode efficiency: measured (ggml: ~1,500 dependent dispatches x 7-10 us bubbles, matvecs at 10-108 GB/s); GCN matvec in LDS reaches 192-229 GB/s | DONE (diagnosis + kernel lab) |
-| 3 | (NEXT) Decode engine JDE (`decode-engine.md`): native-layout kernels, doorbell CPU overlap, replayed command buffers | |
+| 3 | (IN PROGRESS) Decode engine JDE (`decode-engine.md`): native-layout kernels, doorbell CPU overlap, replayed command buffers | |
 | 2c | Overlap CPU misses with GPU hits; tune swap churn | |
 | 3 | Prefill expert streaming per layer with large ubatch (BELLS staging done right) | |
 | 4 | MTP speculative decoding with rejection sampling | |
@@ -65,3 +65,12 @@ GPU op time ~25 ms/token with no experts on the GPU (should be ~8 ms). CPU exper
 
 - Does mainline's new `moe_cache_size` context param (device expert cache) work on Vulkan? Test in step 2.
 - Why does ggml-vulkan's host-to-device path stop at ~8 GB/s on gen3 x16? (step 1)
+
+## Resume point (2026-10-16 ~01:00)
+
+JDE milestone 1-2 in progress (engine repo, branch junkinfer): accessor API in ggml-vulkan, 10 shaders in
+`src/junkinfer/shaders` (all compile for gfx803), `src/junkinfer/jde.h`. Next: `jde.cpp` host engine (per-layer
+GPU segments + CPU experts via ggml type traits, re-recorded per token), CMake shader build, hook in
+`llama_context::decode` before `process_ubatch`; gate: llama-junk-ref -b 1 compare, KL at the noise floor.
+Requirements found: experts must not be in CPU_REPACK buffers (`--no-repack`); KV f16 + flash attn for v1.
+VENE reference run continues unattended (`ref-run.log`, `./ref/run_ref.sh --list`).
