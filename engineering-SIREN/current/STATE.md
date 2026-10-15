@@ -1,0 +1,51 @@
+# STATE — JunkInfer
+
+> Live record. Update sections in place. History goes to `engineering-log.md`.
+
+## Goal
+
+Make Qwen3.6-35B-A3B (`qwen35moe` and fine-tunes) genuinely usable on RX 580 8 GB cards.
+Targets (dev box AUX-1; see README for the table):
+
+- single card: decode >= 50 t/s at any depth to 262k; prefill as high as physics allows
+- dual card: decode >= 80 t/s; prefill >= 1000 t/s at zero context, >= 500 t/s at 262k
+- weights quality >= EXL3 3.5 bpw, KV quality >= q8_0 KV (KLD vs BF16, `quality-gates.md`)
+- MVP must include: OpenAI-compatible server, tool-call parsing, chat templates, prompt/prefix caching
+- release runs on one card; Linux; RX 470/570/580 8 GB first
+
+## Where we are (2026-10-15)
+
+- **Reference run on VENE in progress** (`ref/run_ref.sh`, log `ref-run.log`). Produces the BF16
+  reference, routing traces, imatrix, GGUF quants, EXL3 3.0/3.5/4.0, and the KLD bars.
+- **AUX-1 box fixed:** `amdgpu.dpm=0` removed from grub (it was left in from vLLM wave W45 and
+  silently fixed the GPU at boot clocks). RAM upgraded to 32 GB.
+- **Baseline (mainline llama.cpp 8bb3cf0, Vulkan, DPM on, 32 GB, IQ4_NL 19.3 GiB, -fa 1,
+  RADV_PERFTEST=nogttspill, 1 repeat, smoke):**
+
+  | config | pp512 | tg32 |
+  |---|---|---|
+  | `-ncmoe 40` (all experts on CPU) | 136.1 t/s | 19.9 t/s |
+  | `-ncmoe 29` (11 layers of experts on GPU) | 155.3 t/s | 21.9 t/s |
+
+- Bus: host-to-device 6.8 / 7.9 GB/s (pageable / pinned) through ggml-vulkan, on a PCIe 3.0 x16
+  link (15.75 GB/s theoretical). Same as with DPM off: the bus limit is the copy path, not clocks.
+
+## Plan (one feature at a time, KLD gate before speed claims)
+
+| # | step | status |
+|---|---|---|
+| 0 | MVP: pinned mainline llama.cpp Vulkan build + server on AUX-1, best mainline config, recorded | NEXT |
+| 1 | Fast upload path: CPU writes into the 8 GB BAR / pinned batched copies; measure GB/s vs 15.75 | |
+| 2 | Hybrid expert execution (Strata): GPU computes cached experts, CPU computes misses in the same instant, PCIe share for a fraction | |
+| 3 | Prefill expert streaming per layer with large ubatch (BELLS staging done right) | |
+| 4 | MTP speculative decoding with rejection sampling | |
+| 5 | KVarN KV cache on gfx803 (Vulkan) | |
+| 6 | Weight format by KLD gate: IQ4_XS / ik KT / EXL3 transcode | |
+| 7 | Sparse attention for decode (Quest-style) and prefill (XAttention-style), KLD-gated | |
+| 8 | Second RX 580: layer split with resident experts | waiting for hardware |
+| 9 | CPU kernels for missed experts (ik_llama iqk / Strata AVX2) | |
+
+## Open questions
+
+- Does mainline's new `moe_cache_size` context param (device expert cache) work on Vulkan? Test in step 2.
+- Why does ggml-vulkan's host-to-device path stop at ~8 GB/s on gen3 x16? (step 1)

@@ -1,0 +1,85 @@
+[
+ {"id": "code_lru", "split": "eval", "max_tokens": 900, "messages": [
+  {"role": "user", "content": "Write a thread-safe LRU cache in Python with get/put, a max size, and per-entry TTL. Include type hints and a short test."}]},
+ {"id": "code_cpp_bug", "split": "eval", "max_tokens": 800, "messages": [
+  {"role": "user", "content": "This C++ function sometimes crashes. Find the bug and fix it.\n\n```cpp\nstd::vector<int> merge(const std::vector<int>& a, const std::vector<int>& b) {\n    std::vector<int> out;\n    size_t i = 0, j = 0;\n    while (i < a.size() || j < b.size()) {\n        if (a[i] <= b[j]) out.push_back(a[i++]);\n        else out.push_back(b[j++]);\n    }\n    return out;\n}\n```"}]},
+ {"id": "code_rust_refactor", "split": "eval", "max_tokens": 800, "messages": [
+  {"role": "user", "content": "Refactor this Rust into idiomatic iterator style and explain the ownership changes:\n\n```rust\nfn totals(orders: Vec<(String, u32, f64)>) -> Vec<(String, f64)> {\n    let mut res = Vec::new();\n    for o in orders.iter() {\n        let mut found = false;\n        for r in res.iter_mut() {\n            let r: &mut (String, f64) = r;\n            if r.0 == o.0 { r.1 += o.1 as f64 * o.2; found = true; }\n        }\n        if !found { res.push((o.0.clone(), o.1 as f64 * o.2)); }\n    }\n    res\n}\n```"}]},
+ {"id": "code_sql", "split": "eval", "max_tokens": 700, "messages": [
+  {"role": "system", "content": "You are a senior data engineer. Be concise."},
+  {"role": "user", "content": "Tables: users(id, created_at, country), events(id, user_id, ts, kind). Write a PostgreSQL query for weekly retention cohorts (week 0..8) by signup week, and explain how to index it."}]},
+ {"id": "math_proof", "split": "eval", "max_tokens": 900, "messages": [
+  {"role": "user", "content": "Prove that for every integer n >= 1, the number n^5 - n is divisible by 30."}]},
+ {"id": "math_word", "split": "eval", "max_tokens": 800, "messages": [
+  {"role": "user", "content": "A tank fills through pipe A in 6 hours and through pipe B in 9 hours; a drain empties it in 12 hours. Starting empty with all three open, after 2 hours pipe B is closed. How long in total until the tank is full?"}]},
+ {"id": "logic_puzzle", "split": "eval", "max_tokens": 900, "messages": [
+  {"role": "user", "content": "Five houses in a row are painted different colors; their owners have different pets and drinks. The green house is directly left of the white one. The owner of the red house drinks tea. The dog owner lives in the middle house. The coffee drinker lives next to the cat owner. The first house is yellow. Who could own the fish? Reason carefully and state what is undetermined."}]},
+ {"id": "research_summary", "split": "eval", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "Summarize the following for a technical audience in 5 bullet points, then list two open questions.\n\nMixture-of-experts language models route each token to a small subset of feed-forward experts selected by a learned gate. Because only a fraction of the parameters is active per token, compute per token is low, but the full set of experts must still be stored. On consumer hardware the experts are often kept in system memory and either computed on the CPU or copied to the GPU on demand. Routing statistics show strong skew: a minority of experts receives most of the traffic, and consecutive tokens often reuse experts. Caching hot experts on the GPU therefore captures a large share of the work, but the remaining misses cross the PCIe bus, whose bandwidth is one to two orders of magnitude below that of GPU memory. Prefetching based on the next layer's likely routing can hide part of the latency, while speculative decoding increases the number of distinct experts touched per forward pass."}]},
+ {"id": "tool_search", "split": "eval", "max_tokens": 600,
+  "tools": [
+   {"type": "function", "function": {"name": "web_search", "description": "Search the web and return result snippets.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}}, "required": ["query"]}}},
+   {"type": "function", "function": {"name": "fetch_url", "description": "Fetch a URL and return its text.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}}],
+  "messages": [{"role": "user", "content": "Find the current recommended sampling settings for Qwen3.6 models in thinking mode and cite the source."}]},
+ {"id": "tool_agent_multiturn", "split": "eval", "max_tokens": 700,
+  "tools": [
+   {"type": "function", "function": {"name": "read_file", "description": "Read a file from the repository.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+   {"type": "function", "function": {"name": "run_shell", "description": "Run a shell command in the repository and return stdout/stderr.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}}],
+  "messages": [
+   {"role": "user", "content": "The unit tests in this repo fail. Figure out why and propose a fix."},
+   {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {"name": "run_shell", "arguments": {"command": "pytest -x -q"}}}]},
+   {"role": "tool", "content": "F\n=================================== FAILURES ===================================\n___________________________ test_parse_duration ___________________________\n    def test_parse_duration():\n>       assert parse_duration('1h30m') == 5400\nE       AssertionError: assert 1830 == 5400\ntests/test_util.py:12: AssertionError\n1 failed, 14 passed in 0.31s"},
+   {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {"name": "read_file", "arguments": {"path": "src/util.py"}}}]},
+   {"role": "tool", "content": "import re\n\n_UNITS = {'h': 60, 'm': 60, 's': 1}\n\ndef parse_duration(s: str) -> int:\n    total = 0\n    for num, unit in re.findall(r'(\\d+)([hms])', s):\n        total += int(num) * _UNITS[unit]\n    return total\n"}]},
+ {"id": "tool_json_extract", "split": "eval", "max_tokens": 500,
+  "tools": [
+   {"type": "function", "function": {"name": "create_calendar_event", "description": "Create a calendar event.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "start": {"type": "string", "description": "ISO 8601"}, "duration_minutes": {"type": "integer"}, "attendees": {"type": "array", "items": {"type": "string"}}}, "required": ["title", "start"]}}}],
+  "messages": [{"role": "user", "content": "Schedule a 45 minute design review with Ana and Tomek next Tuesday (2026-10-20) at 14:00 Warsaw time."}]},
+ {"id": "pl_explain", "split": "eval", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "Wyjaśnij prostymi słowami, czym różni się pamięć RAM od pamięci VRAM w karcie graficznej i dlaczego ma to znaczenie dla uruchamiania dużych modeli językowych."}]},
+ {"id": "de_email", "split": "eval", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Schreibe eine höfliche, aber bestimmte E-Mail an einen Vermieter, in der du um die Reparatur einer seit drei Wochen defekten Heizung bittest."}]},
+ {"id": "zh_story", "split": "eval", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "请写一个三百字左右的短篇故事，主题是一位老钟表匠和一个总是迟到的学生。"}]},
+ {"id": "ja_tech", "split": "eval", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "量子化（quantization）が大規模言語モデルの推論速度と品質にどのような影響を与えるか、初心者向けに説明してください。"}]},
+ {"id": "fr_compare", "split": "eval", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Compare les avantages et les inconvénients des pompes à chaleur air-eau par rapport aux chaudières à gaz pour une maison ancienne mal isolée."}]},
+ {"id": "format_json", "split": "eval", "max_tokens": 500, "messages": [
+  {"role": "system", "content": "Respond only with valid JSON matching the requested schema. No prose."},
+  {"role": "user", "content": "Extract entities from: 'On 3 March 2026 Dr. Lena Vogt of Charite Berlin presented results on CRISPR base editing at the Munich biotech summit, funded by a 2.4 million euro EU grant.' Schema: {people:[{name,title,affiliation}], organizations:[], events:[{name,location,date}], money:[{amount,currency,source}]}"}]},
+ {"id": "instr_constraints", "split": "eval", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Write exactly four sentences about the history of the bicycle. The second sentence must contain a number. Do not use the letter 'z'. End with a question."}]},
+ {"id": "creative_poem", "split": "eval", "max_tokens": 500, "messages": [
+  {"role": "user", "content": "Write a short poem in the style of a weather report about a cat who refuses to come inside."}]},
+ {"id": "debug_kernel", "split": "eval", "max_tokens": 900, "messages": [
+  {"role": "user", "content": "My GPU matrix-vector kernel gives correct results for N=4096 but wrong results for N=4100. Each workgroup has 256 threads and processes 4 rows; I load the vector into shared memory in chunks of 1024 floats. What are the likely bugs and how do I test for each?"}]},
+ {"id": "explain_code", "split": "eval", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "Explain what this does and its complexity:\n\n```python\ndef f(a):\n    s, best, lo = {}, 0, 0\n    for hi, x in enumerate(a):\n        if x in s and s[x] >= lo:\n            lo = s[x] + 1\n        s[x] = hi\n        best = max(best, hi - lo + 1)\n    return best\n```"}]},
+ {"id": "advice_plan", "split": "eval", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "I have 6 weeks to prepare for a half marathon. I currently run 15 km per week comfortably. Give me a realistic weekly plan and the main risks."}]},
+ {"id": "es_summary", "split": "eval", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Resume en español las ventajas de usar control de versiones con Git en un proyecto pequeño de investigación, con ejemplos concretos."}]},
+
+ {"id": "c_calib_go", "split": "calib", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "Write a Go HTTP server with a rate limiter middleware (token bucket per client IP) and graceful shutdown."}]},
+ {"id": "c_calib_shell", "split": "calib", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Write a bash script that finds duplicate files by content in a directory tree and prints groups, handling spaces in names."}]},
+ {"id": "c_calib_physics", "split": "calib", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "Explain why the sky is blue and why sunsets are red, including the wavelength dependence of Rayleigh scattering."}]},
+ {"id": "c_calib_tool", "split": "calib", "max_tokens": 500,
+  "tools": [{"type": "function", "function": {"name": "get_weather", "description": "Get the weather forecast for a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}, "days": {"type": "integer"}}, "required": ["city"]}}}],
+  "messages": [{"role": "user", "content": "Should I pack an umbrella for Krakow and Gdansk this weekend?"}]},
+ {"id": "c_calib_pl", "split": "calib", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Napisz krótki poradnik, jak zacząć uprawiać pomidory na balkonie."}]},
+ {"id": "c_calib_de", "split": "calib", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Erkläre den Unterschied zwischen TCP und UDP mit Beispielen aus dem Alltag."}]},
+ {"id": "c_calib_math", "split": "calib", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "Compute the integral of x^2 * e^(-x) from 0 to infinity and explain each step."}]},
+ {"id": "c_calib_review", "split": "calib", "max_tokens": 700, "messages": [
+  {"role": "user", "content": "Review this API design: POST /users/{id}/delete returns 200 with {ok:true}; GET /getAllUsers?page=1 returns a bare array. Suggest improvements."}]},
+ {"id": "c_calib_zh", "split": "calib", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "用简单的语言解释什么是哈希表，以及为什么它的查找通常是常数时间。"}]},
+ {"id": "c_calib_story", "split": "calib", "max_tokens": 600, "messages": [
+  {"role": "user", "content": "Write the opening scene of a mystery novel set on a night train through the Alps."}]}
+]
