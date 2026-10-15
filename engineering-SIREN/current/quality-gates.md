@@ -12,7 +12,7 @@ every scored position, the top-512 log-probs, the exact tail mass and the target
 |---|---|---|---|
 | S1_wiki | wikitext-2 test | 48 x 2048 | second half of each row (49,104) |
 | S2_code | llama.cpp source (eval half of the files) | 48 x 2048 | second half (49,104) |
-| S3_chat | the BF16 model's own replies: code, maths, tool calls, multi-turn agent, 6 languages | 23 x var | the generated tokens |
+| S3_chat | model-written replies: code, maths, tool calls, multi-turn agent, 6 languages (text sampled from UD-IQ4_NL for speed; logits from BF16) | 23 x var | the generated tokens |
 | L_code | one code stream at 32k / 128k / 262k | 3 rows | last 1024 of each |
 | L_prose | War and Peace at 32k / 128k / 262k | 3 rows | last 1024 of each |
 
