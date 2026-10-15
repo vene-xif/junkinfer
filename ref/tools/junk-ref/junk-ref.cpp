@@ -130,7 +130,8 @@ static bool route_cb(struct ggml_tensor * t, bool ask, void * ud) {
     route_state & rs = *(route_state *) ud;
     const int il_topk = layer_of(t->name, "ffn_moe_topk-");
     const int il_w    = layer_of(t->name, "ffn_moe_weights_norm-");
-    const bool want = il_topk >= 0 || il_w >= 0;
+    static const bool ask_none = getenv("JR_CB_ASK_NONE") != nullptr;   // diagnostic: callback registered, asks nothing
+    const bool want = (il_topk >= 0 || il_w >= 0) && !ask_none;
     if (ask) return want;
     if (!want) return true;
 
@@ -367,7 +368,8 @@ int main(int argc, char ** argv) {
                 const bool scored = pos >= (int) row.a && pos < (int) row.b;
                 // llama.cpp runs the LAST layer only on output tokens; with a routing trace every
                 // token must be an output so that layer's experts are seen for the whole batch
-                const bool out = scored || rs.on;
+                static const bool all_out = getenv("JR_ALL_OUT") != nullptr;   // diagnostic
+                const bool out = scored || rs.on || all_out;
                 batch.add(row.tok[pos], pos, 0, out);
                 if (out) out_pos.push_back(scored ? pos : -1);
             }
@@ -377,6 +379,7 @@ int main(int argc, char ** argv) {
             }
             if (rs.on) {
                 route_flush(rs);
+                if (getenv("JR_CB_ASK_NONE")) { rs.acc_T = n; rs.acc_ids.assign(size_t(n) * rs.n_layer * rs.k, 255); rs.acc_w.assign(size_t(n) * rs.n_layer * rs.k, 0); }
                 if (rs.error) { LOG_ERR("routing callback error: %s\n", rs.why.c_str()); return 1; }
                 if (rs.acc_T != n) { LOG_ERR("routing: ubatches covered %lld tokens, batch %d\n", (long long) rs.acc_T, n); return 1; }
                 std::copy(rs.acc_ids.begin(), rs.acc_ids.end(), row_ids.begin() + size_t(start) * rs.n_layer * rs.k);

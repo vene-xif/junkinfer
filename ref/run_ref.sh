@@ -251,16 +251,21 @@ st_smoke() {
   local m=$ANCHORS/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf s=$D/smoke
   mkdir -p "$s"
   "$LB/llama-junk-ref" -m "$m" -ngl 99 -fa on --fit off -c 4096 -b 2048 -ub 2048 -t $NT \
-     --jr-mode dump --jr-tokens "$CORP/S1_wiki.jtok" --jr-rows 0:2 --jr-out "$s/s1.jref" --jr-route "$s/s1.jrtr" --jr-summary "$s/dump.json"
+     --jr-mode dump --jr-tokens "$CORP/S1_wiki.jtok" --jr-rows 0:2 --jr-out "$s/s1.jref" --jr-summary "$s/dump.json"
   "$LB/llama-junk-ref" -m "$m" -ngl 99 -fa on --fit off -c 4096 -b 2048 -ub 2048 -t $NT \
      --jr-mode compare --jr-tokens "$CORP/S1_wiki.jtok" --jr-rows 0:2 --jr-ref "$s/s1.jref" --jr-summary "$s/cmp.json" --jr-label smoke-self
-  cat "$s/dump.json" "$s/cmp.json"
+  # routing pass (graph split at the MoE routing nodes -> unfused top-k path): trace + its KL floor
+  "$LB/llama-junk-ref" -m "$m" -ngl 99 -fa on --fit off -c 4096 -b 2048 -ub 2048 -t $NT \
+     --jr-mode compare --jr-tokens "$CORP/S1_wiki.jtok" --jr-rows 0:2 --jr-ref "$s/s1.jref" --jr-route "$s/s1.jrtr" --jr-summary "$s/route.json" --jr-label smoke-route
+  cat "$s/dump.json" "$s/cmp.json" "$s/route.json"
   py - "$s" <<'EOF'
 import json, os, struct, sys, numpy as np
 s = sys.argv[1]
 c = json.load(open(f"{s}/cmp.json"))
 assert c["n"] == 2 * 1023, c
-assert c["kl_mean"] < 2e-3 and c["top1_agree"] > 0.97, c        # same model twice: only nondeterminism
+assert c["kl_mean"] < 1e-5 and c["top1_agree"] > 0.999, c       # same model, same path: deterministic
+rt = json.load(open(f"{s}/route.json"))
+assert rt["kl_mean"] < 0.03 and rt["top1_agree"] > 0.9, rt      # unfused routing path: small floor only
 assert 1.5 < c["ppl_model"] < 40, c
 f = open(f"{s}/s1.jrtr", "rb"); assert f.read(4) == b"JRTR"
 ver, nl, k = struct.unpack("<III", f.read(12)); assert k == 8, k
@@ -281,7 +286,7 @@ st_ref_short() {
   mkdir -p "$REFS"
   for s in S1_wiki S2_code; do
     "$LB/llama-junk-ref" $JR_BF16 -c 4096 -b 2048 -ub 2048 --jr-mode dump --jr-tokens "$CORP/$s.jtok" \
-       --jr-out "$REFS/$s.jref" --jr-route "$REFS/$s.jrtr" --jr-summary "$REFS/$s.dump.json"
+       --jr-out "$REFS/$s.jref" --jr-summary "$REFS/$s.dump.json"
   done
   cat "$REFS"/*.dump.json
 }
@@ -312,7 +317,7 @@ st_chat() {
   kill $spid; wait $spid 2>/dev/null || true
   trap - EXIT
   "$LB/llama-junk-ref" $JR_BF16 -c 8192 -b 2048 -ub 2048 --jr-mode dump --jr-tokens "$CORP/S3_chat.jtok" \
-     --jr-out "$REFS/S3_chat.jref" --jr-route "$REFS/S3_chat.jrtr" --jr-summary "$REFS/S3_chat.dump.json"
+     --jr-out "$REFS/S3_chat.jref" --jr-summary "$REFS/S3_chat.dump.json"
   cat "$REFS/S3_chat.dump.json"
 }
 
@@ -320,9 +325,26 @@ st_ref_long() {
   wait_for validate_ref
   for s in L_code L_prose; do
     "$LB/llama-junk-ref" $JR_BF16 -c 262144 -b 4096 -ub 4096 --jr-mode dump --jr-tokens "$CORP/$s.jtok" \
-       --jr-out "$REFS/$s.jref" --jr-route "$REFS/$s.jrtr" --jr-summary "$REFS/$s.dump.json"
+       --jr-out "$REFS/$s.jref" --jr-summary "$REFS/$s.dump.json"
   done
   cat "$REFS"/L_*.dump.json
+}
+
+# routing traces from a separate pass: asking for the routing tensors splits the graph and runs the
+# unfused top-k path, which moves the logits slightly (measured 2026-10-15 on IQ4_NL: KL 0.005); the
+# reference itself comes from the standard path. The KL of this pass vs the reference = that floor for BF16.
+st_routes() {
+  wait_for ref_short; wait_for chat
+  mkdir -p "$EVAL"
+  local s
+  for s in S1_wiki S2_code S3_chat L_code L_prose; do
+    [ -s "$REFS/$s.jref" ] || { echo "no reference for $s, skipped"; continue; }
+    local c=4096 b=2048
+    case $s in S3_chat) c=8192 ;; L_*) c=262144; b=4096 ;; esac
+    "$LB/llama-junk-ref" $JR_BF16 -c $c -b $b -ub $b --jr-mode compare --jr-tokens "$CORP/$s.jtok" --jr-ref "$REFS/$s.jref" \
+       --jr-route "$REFS/$s.jrtr" --jr-summary "$EVAL/bf16-routepass.$s.json" --jr-label bf16-routepass
+    cat "$EVAL/bf16-routepass.$s.json" >> "$KLD"
+  done
 }
 
 st_pplbase() {
@@ -469,7 +491,7 @@ st_report() {
 # ------------------------------------------------------------------ main
 
 STAGES="venv download_small download_model build_lcpp build_exl3 build_ik convert corpus smoke ref_short validate_ref chat \
-ref_long pplbase imatrix quant_mainline quant_ik exl3_35 eval_anchors eval_kv eval_quants exl3_40 eval_ik exl3_30 report"
+ref_long routes pplbase imatrix quant_mainline quant_ik exl3_35 eval_anchors eval_kv eval_quants exl3_40 eval_ik exl3_30 report"
 
 if [ $LIST = 1 ]; then
   for s in $STAGES; do
@@ -509,6 +531,7 @@ run_stage validate_ref 1 st_validate_ref
 run_stage chat 1 st_chat
 run_stage imatrix 0 st_imatrix
 run_stage ref_long 0 st_ref_long
+run_stage routes 0 st_routes
 run_stage pplbase 0 st_pplbase
 run_stage exl3_35 0 st_exl3_35
 run_stage eval_anchors 0 st_eval_anchors
