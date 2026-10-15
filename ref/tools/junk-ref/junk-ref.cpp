@@ -84,7 +84,14 @@ struct route_state {
     std::vector<uint16_t> acc_w;
     int64_t acc_T = 0;
     bool error = false;
+    std::string why;
+    bool debug = getenv("JR_ROUTE_DEBUG") != nullptr;
 };
+
+static void route_fail(route_state & rs, const std::string & why) {
+    if (!rs.error) rs.why = why;
+    rs.error = true;
+}
 
 static int layer_of(const char * name, const char * prefix) {
     const size_t n = strlen(prefix);
@@ -106,7 +113,7 @@ static void route_begin_ubatch(route_state & rs, int64_t T) {
 static void route_flush(route_state & rs) {
     if (rs.ub_T <= 0) return;
     for (int il = 0; il < rs.n_layer; ++il) {
-        if (rs.seen[il] != rs.seen_w[il]) rs.error = true;
+        if (rs.seen[il] != rs.seen_w[il]) route_fail(rs, "layer " + std::to_string(il) + " has topk xor weights");
     }
     rs.acc_ids.insert(rs.acc_ids.end(), rs.ub_ids.begin(), rs.ub_ids.end());
     rs.acc_w.insert(rs.acc_w.end(), rs.ub_w.begin(), rs.ub_w.end());
@@ -128,18 +135,23 @@ static bool route_cb(struct ggml_tensor * t, bool ask, void * ud) {
     if (!want) return true;
 
     const int il = il_topk >= 0 ? il_topk : il_w;
-    if (il >= rs.n_layer) { rs.error = true; return true; }
+    if (rs.debug) {
+        fprintf(stderr, "route_cb %-28s type %d ne %lld %lld %lld %lld nb %zu %zu ub_T %lld last %d\n", t->name, (int) t->type,
+            (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2], (long long) t->ne[3], t->nb[0], t->nb[1],
+            (long long) rs.ub_T, rs.last_topk_il);
+    }
+    if (il >= rs.n_layer) { route_fail(rs, std::string("layer index too large: ") + t->name); return true; }
 
     // both tensors are [k, T] (topk: i32 view of the argsort, weights: f32 after the norm div)
     const int64_t k = t->ne[0];
     const int64_t T = t->ne[1];
-    if (k != rs.k || t->ne[2] != 1 || t->ne[3] != 1) { rs.error = true; return true; }
+    if (k != rs.k || t->ne[2] != 1 || t->ne[3] != 1) { route_fail(rs, std::string("unexpected shape: ") + t->name); return true; }
     if (il_topk >= 0 && (rs.ub_T < 0 || il_topk <= rs.last_topk_il)) {
         // first MoE layer of a new ubatch: keep the previous one, start a fresh buffer
         route_flush(rs);
         route_begin_ubatch(rs, T);
     }
-    if (rs.ub_T != T) { rs.error = true; return true; }   // weights without their topk, or a size mismatch
+    if (rs.ub_T != T) { route_fail(rs, std::string("token count mismatch / weights before topk: ") + t->name); return true; }
     const size_t nb = ggml_nbytes(t);
     rs.tmp.resize(nb);
     ggml_backend_tensor_get(t, rs.tmp.data(), 0, nb);
@@ -148,11 +160,11 @@ static bool route_cb(struct ggml_tensor * t, bool ask, void * ud) {
             const char * p = rs.tmp.data() + e * t->nb[0] + j * t->nb[1];
             const size_t o = (size_t(j) * rs.n_layer + il) * rs.k + e;
             if (il_topk >= 0) {
-                if (t->type != GGML_TYPE_I32) { rs.error = true; return true; }
+                if (t->type != GGML_TYPE_I32) { route_fail(rs, std::string("topk not i32: ") + t->name); return true; }
                 const int32_t id = *(const int32_t *) p;
                 rs.ub_ids[o] = (id >= 0 && id < 255) ? (uint8_t) id : 254;
             } else {
-                if (t->type != GGML_TYPE_F32) { rs.error = true; return true; }
+                if (t->type != GGML_TYPE_F32) { route_fail(rs, std::string("weights not f32: ") + t->name); return true; }
                 rs.ub_w[o] = ggml_fp32_to_fp16(*(const float *) p);
             }
         }
@@ -352,9 +364,12 @@ int main(int argc, char ** argv) {
             std::vector<int> out_pos;
             for (int i = 0; i < n; ++i) {
                 const int pos = start + i;
-                const bool out = pos >= (int) row.a && pos < (int) row.b;
+                const bool scored = pos >= (int) row.a && pos < (int) row.b;
+                // llama.cpp runs the LAST layer only on output tokens; with a routing trace every
+                // token must be an output so that layer's experts are seen for the whole batch
+                const bool out = scored || rs.on;
                 batch.add(row.tok[pos], pos, 0, out);
-                if (out) out_pos.push_back(pos);
+                if (out) out_pos.push_back(scored ? pos : -1);
             }
             if (rs.on) route_begin_call(rs);
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
@@ -362,16 +377,17 @@ int main(int argc, char ** argv) {
             }
             if (rs.on) {
                 route_flush(rs);
-                if (rs.error) { LOG_ERR("routing callback saw an unexpected tensor shape/type/order\n"); return 1; }
+                if (rs.error) { LOG_ERR("routing callback error: %s\n", rs.why.c_str()); return 1; }
                 if (rs.acc_T != n) { LOG_ERR("routing: ubatches covered %lld tokens, batch %d\n", (long long) rs.acc_T, n); return 1; }
                 std::copy(rs.acc_ids.begin(), rs.acc_ids.end(), row_ids.begin() + size_t(start) * rs.n_layer * rs.k);
                 std::copy(rs.acc_w.begin(),   rs.acc_w.end(),   row_w.begin()   + size_t(start) * rs.n_layer * rs.k);
             }
-            if (out_pos.empty()) continue;
+            if (std::none_of(out_pos.begin(), out_pos.end(), [](int p) { return p >= 0; })) continue;
             const float * logits = llama_get_logits(ctx);
             for (size_t o = 0; o < out_pos.size(); ++o) {
                 const float * lg = logits + o * size_t(n_vocab);
                 const int pos = out_pos[o];
+                if (pos < 0) continue;   // output only for the routing trace
                 const int32_t target = row.tok[pos + 1];
                 const double lse = log_sum_exp(lg, n_vocab);
                 if (fout) {
