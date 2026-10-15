@@ -79,9 +79,22 @@ run_stage() {
   local name=$1 essential=$2 fn=$3
   if [ -n "$ONLY" ] && [ "$ONLY" != "$name" ]; then return 0; fi
   if done_mark "$name"; then say "skip $name (done $(cat $STATE/$name.done))"; return 0; fi
+  local rf="$STATE/$name.running" opid
+  opid=$(cat "$rf" 2>/dev/null || true)
+  if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null; then
+    # an earlier instance of this script is still running this stage: wait for it, never run it twice
+    say "=== $name already running in pid $opid, waiting"
+    while kill -0 "$opid" 2>/dev/null; do sleep 10; done
+    sleep 2
+    if done_mark "$name"; then say "<<< $name OK (other instance)"; return 0; fi
+    say "<<< $name did not finish in the other instance"
+    [ "$essential" = 1 ] && die "essential stage $name failed (other instance)"
+    return 0
+  fi
   say ">>> $name"
   rm -f "$STATE/$name.failed"
   local t0=$SECONDS rc
+  echo $BASHPID > "$rf"
   # NOT inside an `if`: errexit is ignored in a subshell that is an if-condition
   ( set -e; $fn ) > "$LOGS/$name.log" 2>&1
   rc=$?
@@ -90,8 +103,9 @@ run_stage() {
   else
     failmark "$name" "exit $rc"
     say "<<< $name FAILED ($(( (SECONDS - t0) / 60 )) min) - see $LOGS/$name.log"; tail -n 15 "$LOGS/$name.log" | sed 's/^/    | /'
-    [ "$essential" = 1 ] && die "essential stage $name failed"
   fi
+  rm -f "$rf"
+  [ $rc != 0 ] && [ "$essential" = 1 ] && die "essential stage $name failed"
   return 0
 }
 

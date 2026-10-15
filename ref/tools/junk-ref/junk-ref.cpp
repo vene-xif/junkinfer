@@ -78,6 +78,11 @@ struct route_state {
     std::vector<uint8_t>  seen;     // [n_layer] topk seen in current ubatch
     std::vector<uint8_t>  seen_w;   // [n_layer] weights seen in current ubatch
     std::vector<char>     tmp;
+    int last_topk_il = -1;          // MoE layers arrive in order; a wrap-around starts a new ubatch
+    // ubatches of the current decode call, concatenated in token order (single sequence)
+    std::vector<uint8_t>  acc_ids;
+    std::vector<uint16_t> acc_w;
+    int64_t acc_T = 0;
     bool error = false;
 };
 
@@ -98,6 +103,22 @@ static void route_begin_ubatch(route_state & rs, int64_t T) {
     rs.seen_w.assign(rs.n_layer, 0);
 }
 
+static void route_flush(route_state & rs) {
+    if (rs.ub_T <= 0) return;
+    for (int il = 0; il < rs.n_layer; ++il) {
+        if (rs.seen[il] != rs.seen_w[il]) rs.error = true;
+    }
+    rs.acc_ids.insert(rs.acc_ids.end(), rs.ub_ids.begin(), rs.ub_ids.end());
+    rs.acc_w.insert(rs.acc_w.end(), rs.ub_w.begin(), rs.ub_w.end());
+    rs.acc_T += rs.ub_T;
+    rs.ub_T = -1;
+}
+
+static void route_begin_call(route_state & rs) {
+    rs.acc_ids.clear(); rs.acc_w.clear(); rs.acc_T = 0;
+    rs.ub_T = -1; rs.last_topk_il = -1;
+}
+
 static bool route_cb(struct ggml_tensor * t, bool ask, void * ud) {
     route_state & rs = *(route_state *) ud;
     const int il_topk = layer_of(t->name, "ffn_moe_topk-");
@@ -113,10 +134,12 @@ static bool route_cb(struct ggml_tensor * t, bool ask, void * ud) {
     const int64_t k = t->ne[0];
     const int64_t T = t->ne[1];
     if (k != rs.k || t->ne[2] != 1 || t->ne[3] != 1) { rs.error = true; return true; }
-    if (rs.ub_T != T) {
-        // first MoE tensor of a new ubatch
+    if (il_topk >= 0 && (rs.ub_T < 0 || il_topk <= rs.last_topk_il)) {
+        // first MoE layer of a new ubatch: keep the previous one, start a fresh buffer
+        route_flush(rs);
         route_begin_ubatch(rs, T);
     }
+    if (rs.ub_T != T) { rs.error = true; return true; }   // weights without their topk, or a size mismatch
     const size_t nb = ggml_nbytes(t);
     rs.tmp.resize(nb);
     ggml_backend_tensor_get(t, rs.tmp.data(), 0, nb);
@@ -134,7 +157,7 @@ static bool route_cb(struct ggml_tensor * t, bool ask, void * ud) {
             }
         }
     }
-    if (il_topk >= 0) rs.seen[il] = 1; else rs.seen_w[il] = 1;
+    if (il_topk >= 0) { rs.seen[il] = 1; rs.last_topk_il = il; } else rs.seen_w[il] = 1;
     return true;
 }
 
@@ -216,10 +239,6 @@ int main(int argc, char ** argv) {
         rs.on = true;
         params.cb_eval = route_cb;
         params.cb_eval_user_data = &rs;
-        if (params.n_batch != params.n_ubatch) {
-            LOG_ERR("routing trace needs -b == -ub (one ubatch per decode call)\n");
-            return 2;
-        }
     }
 
     llama_backend_init();
@@ -337,18 +356,16 @@ int main(int argc, char ** argv) {
                 batch.add(row.tok[pos], pos, 0, out);
                 if (out) out_pos.push_back(pos);
             }
-            rs.ub_T = -1;
+            if (rs.on) route_begin_call(rs);
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
                 LOG_ERR("decode failed at row %d pos %d\n", r, start); return 1;
             }
             if (rs.on) {
-                if (rs.error) { LOG_ERR("routing callback saw an unexpected tensor shape/type\n"); return 1; }
-                if (rs.ub_T != n) { LOG_ERR("routing: ubatch had %lld tokens, batch %d\n", (long long) rs.ub_T, n); return 1; }
-                for (int il = 0; il < rs.n_layer; ++il) {
-                    if (rs.seen[il] != rs.seen_w[il]) { LOG_ERR("routing: layer %d topk/weights mismatch\n", il); return 1; }
-                }
-                std::copy(rs.ub_ids.begin(), rs.ub_ids.end(), row_ids.begin() + size_t(start) * rs.n_layer * rs.k);
-                std::copy(rs.ub_w.begin(),   rs.ub_w.end(),   row_w.begin()   + size_t(start) * rs.n_layer * rs.k);
+                route_flush(rs);
+                if (rs.error) { LOG_ERR("routing callback saw an unexpected tensor shape/type/order\n"); return 1; }
+                if (rs.acc_T != n) { LOG_ERR("routing: ubatches covered %lld tokens, batch %d\n", (long long) rs.acc_T, n); return 1; }
+                std::copy(rs.acc_ids.begin(), rs.acc_ids.end(), row_ids.begin() + size_t(start) * rs.n_layer * rs.k);
+                std::copy(rs.acc_w.begin(),   rs.acc_w.end(),   row_w.begin()   + size_t(start) * rs.n_layer * rs.k);
             }
             if (out_pos.empty()) continue;
             const float * logits = llama_get_logits(ctx);
