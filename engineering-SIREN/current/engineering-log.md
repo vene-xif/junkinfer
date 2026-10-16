@@ -256,3 +256,22 @@ JDE decode is unaffected (CPU misses read the same pages at 24.3 GB/s; 21.35 ms/
 | server decode warm | 42 t/s | 41 t/s |
 
 Local KLD refs moved to AUX-1 `~/junkinfer/data/refs_local/` (/tmp is wiped on reboot).
+
+## 2026-10-16 (later) — KV type quality (llama.cpp rotation on), prefill tile tuning
+
+KL vs f16 KV, graph path, S1 rows 0-2 (3x2048 tokens, IQ4_NL weights):
+
+| KV | KL mean | p99 | top-1 |
+|---|---|---|---|
+| q8_0 | 0.0015 | 0.018 | 98.6% |
+| q5_1 | 0.0037 | 0.038 | 97.9% |
+| q5_0 | 0.0050 | 0.048 | 97.3% |
+| q4_1 | 0.0071 | 0.066 | 96.0% |
+| q4_0 | 0.0078 | 0.085 | 96.0% |
+
+Only q8_0 meets the KV bar; 5-bit needs KVarN-style handling (outlier/tail) to qualify. KV stays q8_0.
+
+MUL_MAT_ID tile sweep (GGML_VK_MMQID_* hook): the medium mmq-id class is used; no valid (BK=32) shape beats
+ggml's GCN default (294 t/s); BK=16 "522 t/s" is wrong (KL NaN). Prefill stays at the pinned-memory 294 t/s.
+
+VENE: CPU-only quant KLD running (`ref/eval_cpu.sh`, nice 19, 4 threads, GPU never touched - the user uses it).
