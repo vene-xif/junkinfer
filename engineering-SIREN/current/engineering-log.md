@@ -194,3 +194,21 @@ exposed CPU 7.5-9.6 ms vs 3.7). Even an ideal multi-token matvec leaves the 2-to
 for 1.83 tokens ~ break-even. MTP becomes a win with (a) a higher expert hit rate (lower-bit experts at the
 KLD bar, or a second card), (b) the draft head inside JDE, (c) GPU reading part of the misses over PCIe
 concurrently with the CPU. Kept implemented, off by default.
+
+## 2026-10-16 (later) — q8_0 KV in JDE, 262k context in the server
+
+- llama.cpp rotates attention vectors when the KV cache is quantised (orthonormal Walsh-Hadamard: q, k by H_256
+  after RoPE, v by H_64 blocks, output rotated back). A JDE q8_0 path without it read the graph-written prompt
+  cells permuted (same rms, different values; KL 0.0156). With in-LDS FWHTs: KL vs the q8_0 graph path 0.0012
+  (ub1) / 0.0006 (ub3). (ggml q8_0 KV vs f16 KV: 0.00065, i.e. q8_0 KV is essentially free in quality.)
+- Expert cache now sized from the VRAM budget after llama.cpp's allocations (JI_CACHE_MIB=auto).
+- VRAM trade-off at 262k q8_0 KV (2.85 GB): the prefill compute buffer scales with ctx x ubatch
+  (ub 2048 leaves 655 MiB for the cache, ub 1024 leaves 3.0 GB).
+
+| server config | expert cache | prefill (6.7k) | decode warm |
+|---|---|---|---|
+| 32k f16 KV, ub 2048 | 4.5 GB (fixed) | 215 t/s | 46 t/s |
+| 262k q8_0 KV, ub 1024 (default) | 2.8 GB (auto) | 175 t/s | 42 t/s |
+
+Decode at short depth in the harness (ub 1): 21.1 ms (32k), 21.3 (128k), 22.5 (262k). Deep-context decode
+still pays a dense KV read (2.85 GB per token at 262k): sparse attention is the next lever for depth.

@@ -15,10 +15,10 @@ Targets (dev box AUX-1; see README for the table):
 
 ## Where we are (2026-10-16)
 
-- **MVP v1 = JDE in llama-server: 46.3 t/s warm decode via the OpenAI API** (`scripts/serve.sh`, default
-  `JI_ENGINE=jde`: `--cpu-moe --no-repack`, f16 KV, 32k ctx, 4500 MiB expert cache, 2 swaps/token).
-  `smoke_api.py` ALL PASS (chat, tool_calls, prefix cache 6,689 -> 23 tokens). Prefill 123 t/s (ggml path,
-  all experts on CPU). `JI_ENGINE=ggml` keeps MVP v0 (q8_0 KV, 262k, ~21 t/s).
+- **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**
+  (JDE implements llama.cpp's quantised-KV Hadamard rotation), expert cache auto-sized from free VRAM (2.8 GB),
+  ubatch 1024. Warm decode **42 t/s**, prefill **175 t/s** (6.7k tokens), `smoke_api.py` ALL PASS.
+  Shorter context buys speed: `JI_CTX=32768 JI_UBATCH=2048` -> decode 46 t/s, prefill 215 t/s.
 - JDE in the KLD harness: 21.1 ms/token at short depth, 39 t/s over a 2048-token row, KL at the noise floor
   (engine e08c04714). See engineering-log 2026-10-16.
 - **VENE GPU is off-limits** (3090 Xid 79 twice under exl3 load). Remaining reference work (EXL3 bars, KLD
