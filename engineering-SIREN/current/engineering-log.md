@@ -240,3 +240,19 @@ Prefill at depth is ggml's path (233 s for 33.6k tokens) and is now the most vis
   ("Not enough memory for command submission", device lost). Next: raise amdgpu.gttsize (kernel param, reboot)
   or pin only part of the experts / double-buffer uploads in the scheduler (overlap memcpy+DMA with compute,
   bound ~ max(3.2 s compute, 1.65 s PCIe) -> ~320 t/s). Then GEMM tile tuning for MUL_MAT_ID (~0.95 TFLOPS).
+
+## 2026-10-16 (later) — pinned experts: prefill +35-50%
+
+AUX-1 now boots with `ttm.pages_limit=6291456 amdgpu.gttsize=24576` (GTT 24 GB; default was half of RAM, 16.8 GB) and
+a udev rule pinning DPM at `high` (a reboot had reset it to auto). With `--load-mode none` the CPU experts load
+into pinned Vulkan_Host memory (17.5 GB), so op-offload uploads are async DMA instead of staged synchronous copies.
+JDE decode is unaffected (CPU misses read the same pages at 24.3 GB/s; 21.35 ms/token, KL unchanged).
+
+| (262k q8_0 KV, ub 1024) | before | pinned |
+|---|---|---|
+| llama-bench pp1024 / pp4096 | 215 / 205 | 294 / 279 |
+| server prefill 6.7k tokens | 175 t/s | 260 t/s |
+| server prefill 33.6k tokens | 143 t/s (235 s) | 194 t/s (173 s) |
+| server decode warm | 42 t/s | 41 t/s |
+
+Local KLD refs moved to AUX-1 `~/junkinfer/data/refs_local/` (/tmp is wiped on reboot).
