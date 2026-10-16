@@ -12,12 +12,13 @@ export RADV_PERFTEST=${RADV_PERFTEST-nogttspill}
 if [ "${JI_ENGINE:-jde}" = jde ]; then
   # JunkInfer decode engine (JDE): custom Vulkan decode, experts in host RAM + an adaptive VRAM expert cache.
   # Needs --cpu-moe --no-repack and an f16 KV cache (KVarN/q8 KV in JDE is a later step), so the context is
-  # limited by VRAM: 32k f16 KV = 640 MiB.
+  # limited by VRAM: 32k f16 KV = 640 MiB. Prefill stays on the ggml path; ubatch 2048 lets op-offload stream
+  # the experts to the GPU once per 2048 tokens (215 t/s vs 123 at ubatch 512).
   export JI_DECODE=1 JI_CACHE_MIB=${JI_CACHE_MIB:-4500} JI_CACHE_SWAPS=${JI_CACHE_SWAPS:-2}
   exec "$ENGINE/llama-server" -m "$MODEL" \
     -ngl 99 --cpu-moe --no-repack -fa on --fit off \
     -c "${JI_CTX:-32768}" -ctk f16 -ctv f16 \
-    -np 1 --jinja -t "${JI_THREADS:-6}" \
+    -np 1 --jinja -t "${JI_THREADS:-6}" -b 2048 -ub 2048 \
     --host "${JI_HOST:-127.0.0.1}" --port "${JI_PORT:-8080}" \
     "$@"
 fi
