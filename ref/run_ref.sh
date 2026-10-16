@@ -374,7 +374,8 @@ quant_mainline() {
     if [ $q = Q8_0 ]; then
       "$LB/llama-quantize" "$BF16" "$out.tmp" $q $NT_Q
     else
-      "$LB/llama-quantize" --imatrix "$GG/imatrix.dat" "$BF16" "$out.tmp" $q $NT_Q
+      # the MTP block (blk.40) never runs during imatrix collection: keep it at q8_0
+      "$LB/llama-quantize" --imatrix "$GG/imatrix.dat" --tensor-type 'blk\.40\.=q8_0' "$BF16" "$out.tmp" $q $NT_Q
     fi
     mv "$out.tmp" "$out"
     touch "$STATE/q_$q.ready"
