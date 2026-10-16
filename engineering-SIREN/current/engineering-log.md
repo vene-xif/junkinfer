@@ -212,3 +212,19 @@ concurrently with the CPU. Kept implemented, off by default.
 
 Decode at short depth in the harness (ub 1): 21.1 ms (32k), 21.3 (128k), 22.5 (262k). Deep-context decode
 still pays a dense KV read (2.85 GB per token at 262k): sparse attention is the next lever for depth.
+
+## 2026-10-16 (later) — decode at depth
+
+`scripts/depth_bench.py N gen`: an N-token prompt through the server, then a short generation (second call
+reuses the prefix, so it measures decode at depth with a warm expert cache).
+
+| depth | prefill | decode (warm) | per token |
+|---|---|---|---|
+| ~0.2k | 175 t/s | 42 t/s | 23.8 ms |
+| 33.6k (before attn_long) | 143 t/s | 25.7 t/s (cold) | 33.8 ms |
+| 33.6k (attn_long) | 143 t/s | 34.9 t/s | 28.4 ms |
+
+attn_long (n_kv > 8192): the first version (lane = cell, all heads) read K rows per lane and thrashed L1
+(64 rows per load instruction); 4 lanes per cell + clustered-add reduction made K reads coalesced. Still ~2x
+off bandwidth (2.5 ms/layer at 131k); deep context needs sparse attention (read a fraction of the KV).
+Prefill at depth is ggml's path (233 s for 33.6k tokens) and is now the most visible cost for long prompts.
