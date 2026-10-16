@@ -15,8 +15,12 @@ Targets (dev box AUX-1; see README for the table):
 
 ## Where we are (2026-10-16)
 
-- **JDE decode engine: 25.5 ms/token (39 t/s) at short depth, KL at noise floor** (engine 384eda39e,
-  `JI_DECODE=1 JI_CACHE_MIB=4500`, `--cpu-moe --no-repack -fa on`, f16 KV). See engineering-log 2026-10-16.
+- **MVP v1 = JDE in llama-server: 46.3 t/s warm decode via the OpenAI API** (`scripts/serve.sh`, default
+  `JI_ENGINE=jde`: `--cpu-moe --no-repack`, f16 KV, 32k ctx, 4500 MiB expert cache, 2 swaps/token).
+  `smoke_api.py` ALL PASS (chat, tool_calls, prefix cache 6,689 -> 23 tokens). Prefill 123 t/s (ggml path,
+  all experts on CPU). `JI_ENGINE=ggml` keeps MVP v0 (q8_0 KV, 262k, ~21 t/s).
+- JDE in the KLD harness: 21.1 ms/token at short depth, 39 t/s over a 2048-token row, KL at the noise floor
+  (engine e08c04714). See engineering-log 2026-10-16.
 - **VENE GPU is off-limits** (3090 Xid 79 twice under exl3 load). Remaining reference work (EXL3 bars, KLD
   evals of the quants) needs a CPU plan. BF16 reference dumps (`data/refs`) are complete and usable.
 
