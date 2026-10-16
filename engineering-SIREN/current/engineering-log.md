@@ -275,3 +275,26 @@ MUL_MAT_ID tile sweep (GGML_VK_MMQID_* hook): the medium mmq-id class is used; n
 ggml's GCN default (294 t/s); BK=16 "522 t/s" is wrong (KL NaN). Prefill stays at the pinned-memory 294 t/s.
 
 VENE: CPU-only quant KLD running (`ref/eval_cpu.sh`, nice 19, 4 threads, GPU never touched - the user uses it).
+
+## 2026-10-16 (later) — elastic expert cache, prefill investigation
+
+**Elastic expert slots (engine 268ffaa28+):** the 262k q8_0 KV cache (2.85 GB over 3 VkBuffers) is mostly empty in
+practice; JDE carves 1580 expert slots (2.67 GB) from the top cells of the 20 attention K/V tensors and evicts them
+ahead of the context (jde_kv_guard before every ubatch, n_kv + n_tokens + 4096 cells). Correct through evictions
+(ctx 8192: 60 evictions over 3 rows, KL at floor). Warm decode at 262k: 42 -> 46.5 t/s; at 33.6k depth 35 -> 38-39.
+
+**Prefill, what bounds it (ub 1024, pinned experts, ~3.8 s per ubatch):** compute. MUL_MAT_ID runs at 0.93 TFLOPS
+(~32 rows per expert; idle warps in 64-wide tiles), dense matmuls at 2.1 TFLOPS: together ~3.6 s. Not the expert
+upload: a weight prefetcher (second queue, 13.4 ms per 144 MiB at 11.3 GB/s, 82% hits) gave no gain (kept opt-in,
+GGML_VK_WEIGHT_PREFETCH=1). (A "skip the uploads" timing reached 464 t/s but is invalid: garbage experts change the
+routing.) ggml mul_mm tile overrides (incl. tall-narrow 128x32/128x16 for MoE) did not beat the GCN default.
+Larger ubatches give more rows per expert:
+
+| server, 262k q8_0 KV | prefill 6.7k | prefill 33.6k | decode warm | decode @33.6k |
+|---|---|---|---|---|
+| ub 1024 | 271 t/s | 247 t/s | 46.5 | 38.3 |
+| **ub 2048 (default)** | **302** | **293 (115 s)** | **46** | **39** |
+| ub 4096 | 344 | 283 | 44 | 38.7 |
+
+Next for prefill: a GCN MoE GEMM for few rows per expert (weights-stationary, all of an expert's rows per
+workgroup) - MoE is ~60% of prefill time; at dense efficiency prefill would reach ~430 t/s.

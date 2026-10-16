@@ -12,14 +12,15 @@ export RADV_PERFTEST=${RADV_PERFTEST-nogttspill}
 if [ "${JI_ENGINE:-jde}" = jde ]; then
   # JunkInfer decode engine (JDE): custom Vulkan decode, experts in host RAM + an adaptive VRAM expert cache sized
   # from the VRAM left after weights, KV cache and compute buffers (JI_CACHE_MIB=auto). q8_0 KV (with llama.cpp's
-  # Hadamard rotation, which JDE implements) at the full 262k context. Prefill stays on the ggml path: ubatch 1024
-  # lets op-offload stream the experts once per 1024 tokens; larger ubatches cost too much VRAM at 262k
-  # (the KQ mask/scores scale with ctx x ubatch) and starve the expert cache.
+  # Hadamard rotation, which JDE implements) at the full 262k context. Prefill stays on the ggml path. ubatch 2048
+  # is the measured sweet spot at 262k: MoE GEMMs get more rows per expert (prefill 302 t/s on 6.7k, 293 on 33.6k)
+  # while JDE's elastic expert slots in the unused KV tail keep decode at ~46 t/s; 4096 is faster on short prompts
+  # (344) but slower at depth and on decode (KQ mask/scores scale with ctx x ubatch).
   # --load-mode none puts the CPU experts in pinned host memory, so op-offload uploads are async DMA instead of
   # staged synchronous copies (prefill +35%). Needs a GTT limit above the expert size: the kernel default is half
   # of RAM (16 GB on AUX-1); AUX-1 boots with ttm.pages_limit=6291456 amdgpu.gttsize=24576 (24 GB).
   export JI_DECODE=1 JI_CACHE_MIB=${JI_CACHE_MIB:-auto} JI_CACHE_SWAPS=${JI_CACHE_SWAPS:-2}
-  UB=${JI_UBATCH:-1024}
+  UB=${JI_UBATCH:-2048}
   exec "$ENGINE/llama-server" -m "$MODEL" \
     -ngl 99 --cpu-moe --no-repack --load-mode none -fa on --fit off \
     -c "${JI_CTX:-262144}" -ctk q8_0 -ctv q8_0 \

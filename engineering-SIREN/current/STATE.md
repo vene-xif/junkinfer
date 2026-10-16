@@ -17,8 +17,9 @@ Targets (dev box AUX-1; see README for the table):
 
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**
   (JDE implements llama.cpp's quantised-KV Hadamard rotation), expert cache auto-sized from free VRAM (2.8 GB),
-  ubatch 1024, experts pinned (`--load-mode none`, needs AUX-1's 24 GB GTT boot params). Warm decode **41-42 t/s**,
-  prefill **260 t/s** (6.7k tokens), 194 t/s at 33.6k; decode at 33.6k depth 35 t/s. `smoke_api.py` ALL PASS.
+  ubatch 2048, experts pinned (`--load-mode none`, needs AUX-1's 24 GB GTT boot params), elastic expert slots in
+  the unused KV tail. Warm decode **46 t/s**, prefill **302 t/s** (6.7k tokens), **293 t/s at 33.6k** (115 s);
+  decode at 33.6k depth 39 t/s. `smoke_api.py` ALL PASS.
   Shorter context buys speed: `JI_CTX=32768 JI_UBATCH=2048` -> decode 46 t/s, prefill 215 t/s.
 - JDE in the KLD harness: 21.1 ms/token at short depth, 39 t/s over a 2048-token row, KL at the noise floor
   (engine e08c04714). See engineering-log 2026-10-16.
