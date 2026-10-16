@@ -318,3 +318,25 @@ workgroup) - MoE is ~60% of prefill time; at dense efficiency prefill would reac
 
 Server (262k q8_0 KV, ub 2048): prefill 306 t/s (6.7k), 291 t/s (33.6k, 115 s); decode 45 t/s warm, 39 t/s at 33.6k.
 Remaining prefill shares (ub 2048): MoE GEMM ~35%, dense GEMM ~25% (2.1 TFLOPS), FA ~5%, elementwise ~6%.
+
+## 2026-10-16 (evening) — EXL3 runs (milestone 1)
+
+Model: `UnstableLlama/Qwen3.6-35B-A3B-exl3-4.00bpw` (rev b7f4bd67; all linears 4 bpw, LM head 6 bpw, mcg codebook
+0xCBAC1FED on every tensor). Converted with `tools/exl3/exl3_to_gguf.py` (metadata copied from the IQ4_NL GGUF,
+MTP dropped) -> AUX-1 `~/models/exl3/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf`, 17.35 GiB, ~3 min.
+
+- GDN value heads: reordered grouped -> tiled after all. Each head is 128 wide = one Hadamard block, so moving
+  whole blocks (8 trellis tile columns + the svh/suh slice) commutes with the blockwise Hadamard. No grouped-order
+  special case anywhere (the design doc's hk = hv/2 mapping is not needed).
+- Engine 361d77880: `GGML_TYPE_EXL3_4/6` (block = one 16x16 tile; tiles [N/16][K/16]; rows nominal), loader
+  creates `<w>.suh/.svh` (F32), graph wraps every EXL3 matmul as `H128(H128(x*suh) W) * svh` (experts: suh/svh
+  gathered by expert id), Vulkan dequantizes tiles to f16 (`dequant_exl3.comp`) and reuses the f16 GEMMs; CPU
+  backend refuses EXL3 ops, Vulkan `offload_op` always takes them. JDE stays off for EXL3 models.
+- Fixed on the way: `common_fit_params` builds a no_alloc model -> the Hadamard tensor needs a dummy buffer there.
+
+Smoke: greedy "The capital of France is" -> " Paris." (x4, raw completion); chat "why is the sky blue" -> a correct
+sentence. Server (32k ctx, ub 2048, q8_0 KV): **prefill 140.5 t/s on 6.6k tokens, decode 0.7 t/s**. Decode is
+the full-tensor f16 dequant per matmul (incl. the 248k x 2048 LM head every token) - nothing is a mat-vec yet.
+
+Next: EXL3 in JDE (mat-vec kernels with the Hadamard/scale stages fused, expert slots, CPU misses), then an EXL3
+MoE GEMM (trellis decode inside the GCN tile loader instead of dequantizing every expert to f16 per ubatch).

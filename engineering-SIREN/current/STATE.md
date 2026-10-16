@@ -15,6 +15,10 @@ Targets (dev box AUX-1; see README for the table):
 
 ## Where we are (2026-10-16)
 
+- **EXL3 runs (milestone 1, graph path only):** the community EXL3 4.0 bpw quant converts to a JunkInfer GGUF
+  (`tools/exl3/exl3_to_gguf.py`) and serves correct output; prefill 140 t/s (6.6k), decode 0.7 t/s (no EXL3
+  mat-vec / JDE yet). Design + status: `exl3-support.md`.
+
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**
   (JDE implements llama.cpp's quantised-KV Hadamard rotation), expert cache auto-sized from free VRAM (2.8 GB),
   ubatch 2048, experts pinned (`--load-mode none`, needs AUX-1's 24 GB GTT boot params), elastic expert slots in

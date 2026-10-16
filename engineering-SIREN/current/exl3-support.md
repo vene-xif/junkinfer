@@ -1,6 +1,6 @@
 # EXL3 support — design
 
-Status: ACTIVE, 2026-10-16. Goal (user): get EXL3-class quants of qwen35moe running in JunkInfer at all; then fast.
+Status: ACTIVE, 2026-10-16. Milestone 1 (runs at all, graph path) DONE - see engineering-log 2026-10-16 evening. Goal (user): get EXL3-class quants of qwen35moe running in JunkInfer at all; then fast.
 First model: community `UnstableLlama/Qwen3.6-35B-A3B-exl3-4.00bpw` (exllamav3 0.0.29, codebook mcg, 4 bpw,
 LM head 6 bpw), on AUX-1 at `~/models/exl3/Qwen3.6-35B-A3B-exl3-4.00bpw`. (Making our own EXL3 quants and
 the KLD bars wait until VENE's GPU is available again — user, 2026-10-16.)
@@ -23,8 +23,8 @@ dt_bias, conv1d plain. No MTP layer, no vision use.
 
 1. **GGUF converter** (`tools/exl3/exl3_to_gguf.py`): metadata from the existing qwen35moe GGUF (no MTP),
    llama.cpp's tensor transforms (A_log -> -exp, dt_bias rename, conv1d squeeze, RMSNorm +1). GDN stays in HF's
-   *grouped* V-head order (EXL3 rows cannot be permuted: the Hadamard mixes 128-blocks) - flagged in metadata;
-   JDE's GDN kernel takes a grouped/tiled head mapping. EXL3 linears -> new ggml types EXL3_4 / EXL3_6
+   *grouped* V-head order ... SUPERSEDED: heads are 128 wide = one Hadamard block, so whole heads are moved and
+   the GGUF uses llama.cpp's tiled order like every other qwen35moe GGUF. EXL3 linears -> new ggml types EXL3_4 / EXL3_6
    (block 256 weights = 32*bits bytes; data kept in exllamav3's tile order; "rows" are nominal), plus F16
    `<name>.suh` / `.svh` tensors (experts: [E, K] / [E, N]).
 2. **ggml**: register the types (sizes only; no generic kernels). The graph path never computes them.
