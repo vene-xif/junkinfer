@@ -228,3 +228,15 @@ attn_long (n_kv > 8192): the first version (lane = cell, all heads) read K rows 
 (64 rows per load instruction); 4 lanes per cell + clustered-add reduction made K reads coalesced. Still ~2x
 off bandwidth (2.5 ms/layer at 131k); deep context needs sparse attention (read a fraction of the KV).
 Prefill at depth is ggml's path (233 s for 33.6k tokens) and is now the most visible cost for long prompts.
+
+## 2026-10-16 (end of session) — prefill findings
+
+- ggml-vulkan tiled transpose-concat (engine 5f5330640): the GDN conv-window concat was 18% of prefill; prefill
+  pp1024 196 -> 215 t/s, pp4096 205 t/s (ub 1024). Graph-path KL unchanged (0.0005).
+- Remaining prefill structure (ub 1024, 4.75 s per ubatch): 119 splits, each uploads one offloaded expert tensor
+  (~151 MB) synchronously: the experts are in a pageable mmap, so ggml-vulkan's async CPU->GPU copy refuses
+  (needs pinned memory) and the scheduler syncs the GPU, memcpys to staging, copies, waits - no overlap.
+- `--load-mode none` (pinned host buffers for the CPU experts) fails: ~18 GB pinned > GTT size 16.8 GB
+  ("Not enough memory for command submission", device lost). Next: raise amdgpu.gttsize (kernel param, reboot)
+  or pin only part of the experts / double-buffer uploads in the scheduler (overlap memcpy+DMA with compute,
+  bound ~ max(3.2 s compute, 1.65 s PCIe) -> ~320 t/s). Then GEMM tile tuning for MUL_MAT_ID (~0.95 TFLOPS).
