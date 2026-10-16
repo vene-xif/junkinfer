@@ -122,3 +122,38 @@ JDE v1 (engine c2026523e+): every op of the decode step in custom Vulkan kernels
 one GPU segment per layer (serial), command buffers recorded per token. Test: tiny160 row, b=1, IQ4_NL,
 `--cpu-moe --no-repack -fa on`: all tokens through JDE (0 ggml graph computes), KL 0.000689 vs the
 standard path with identical flags, top-1 95.8% (95 positions). Speed 21 t/s (= mainline). Correct first.
+
+## 2026-10-16 — JDE: 21 -> 39 t/s (hybrid cache, attention, kernels, replay)
+
+Engine commits 4fbfd355a, 0375e4d51, 384eda39e. Every step gated on tiny160 KL vs the standard path
+(0.000434-0.000913, noise floor). Speeds are steady-state per-token (JI_PROFILE window 64-128, ctx < 200)
+unless noted. IQ4_NL, `--cpu-moe --no-repack -fa on`, 6 CPU threads.
+
+| step | ms/token | note |
+|---|---|---|
+| v1 (all experts on CPU, serial) | 43.6 | GPU 21 + CPU 21 |
+| hybrid VRAM expert cache (3000 MiB, LFU decay, 8 swaps/token) + overlapped CPU misses | 42.3 | 70% hits |
+| GQA split-K attention (one workgroup per kv head x chunk serves 8 q heads) | 40.7 | attn 2.49 -> 0.98 ms at 2k ctx |
+| word-wise dequant (4-byte LDS reads, funnel shift, offsets folded into x sums) | ~40 | q6_K LM head 109 -> 143 GB/s, q5_K 2x |
+| persistent matvec (576 WGs, register prefetch) + fused rmsnorm/swiglu/wsum/gate | ~41 | fewer dependent steps; fusion only pays with persistent WGs |
+| **slot map read from a host shadow** | **30.0** | the cache update scanned the BAR slot map: uncached PCIe reads, 7 ms/token |
+| replayed command buffers, B queued behind A | 26.8 | record 2 ms/token gone; 81 submits remain |
+| same, cache 4500 MiB | **25.5 (39 t/s)** | 79% hits |
+
+Findings:
+- **Dependent dispatch costs ~6-8 us on gfx803/RADV regardless of barrier flavour** (compute-only vs full),
+  clocks pinned high. Only fewer dependent steps help.
+- **The gfx8 L2 caches system memory and is not invalidated mid-submission.** A host-set VkEvent waited on by
+  the GPU hung the queue (GPU reset); a GPU-polled doorbell saw the flag only by luck of eviction and read
+  stale CPU partials (KL 0.6-0.8). Host->GPU data must cross a submission boundary. Design consequence: per
+  layer, A[il] (+B[il] queued) -> host waits A's fence -> CPU misses (overlap B) -> submit A[il+1].
+- Per-shape matvec bandwidth (JI_BENCH, pipelined / dependent): iq4_nl 8192x2048 198/152 GB/s, q8_0 2048x4096
+  189/133, q6_K LM head 157-175, q5_K 2048x4096 163/112, small 1 MB shapes 160-290 pipelined but ~14 us dependent.
+
+Per-token budget now (25.5 ms): GPU A segments ~18 ms (kernels ~14), CPU misses exposed 3.4, submits 1.8,
+cache update memcpy 1.4. Next: async cache update, LM head and router kernels, fewer steps per layer, then MTP.
+
+VENE: the 3090 fell off the bus a second time (10:08, Xid 79) in the same exl3_35 conversion. User: do not
+use VENE's GPU any more. Done on VENE: BF16 refs (short/long/chat), routes, ppl base, imatrix, GGUF Q8_0,
+IQ4_XS, Q4_K_M, IQ3_S, IQ4_KT, IQ3_KT. Not done: IQ3_XXS/Q6_K (CPU, interrupted by the reboot), EXL3 x3,
+all KLD evals (GPU). KLD evals must move to CPU (AUX-1 or VENE CPU) or a different plan.

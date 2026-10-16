@@ -13,7 +13,14 @@ Targets (dev box AUX-1; see README for the table):
 - MVP must include: OpenAI-compatible server, tool-call parsing, chat templates, prompt/prefix caching
 - release runs on one card; Linux; RX 470/570/580 8 GB first
 
-## Where we are (2026-10-15)
+## Where we are (2026-10-16)
+
+- **JDE decode engine: 25.5 ms/token (39 t/s) at short depth, KL at noise floor** (engine 384eda39e,
+  `JI_DECODE=1 JI_CACHE_MIB=4500`, `--cpu-moe --no-repack -fa on`, f16 KV). See engineering-log 2026-10-16.
+- **VENE GPU is off-limits** (3090 Xid 79 twice under exl3 load). Remaining reference work (EXL3 bars, KLD
+  evals of the quants) needs a CPU plan. BF16 reference dumps (`data/refs`) are complete and usable.
+
+### Earlier (2026-10-15)
 
 - **Reference run on VENE in progress** (`ref/run_ref.sh`, log `ref-run.log`). Produces the BF16
   reference, routing traces, imatrix, GGUF quants, EXL3 3.0/3.5/4.0, and the KLD bars.
@@ -46,7 +53,7 @@ at short depth. Smoke numbers, one run each.
 | 1 | Fast upload path: measured (11.2 GB/s batched DMA; BAR writes 7.9); ggml-vulkan async staging ring | DONE 2026-10-15 |
 | 2a | Hybrid expert execution, serial (GPU hits + CPU misses, adaptive LFU cache) | DONE, correct, no speed gain yet (GPU half is the bottleneck) |
 | 2b | gfx803 decode efficiency: measured (ggml: ~1,500 dependent dispatches x 7-10 us bubbles, matvecs at 10-108 GB/s); GCN matvec in LDS reaches 192-229 GB/s | DONE (diagnosis + kernel lab) |
-| 3 | (IN PROGRESS) Decode engine JDE (`decode-engine.md`): native-layout kernels, doorbell CPU overlap, replayed command buffers | |
+| 3 | (IN PROGRESS) Decode engine JDE (`decode-engine.md`): native-layout kernels, CPU overlap, replayed command buffers | 21 -> 39 t/s, KL at floor; next: async cache update, LM head/router, MTP |
 | 2c | Overlap CPU misses with GPU hits; tune swap churn | |
 | 3 | Prefill expert streaming per layer with large ubatch (BELLS staging done right) | |
 | 4 | MTP speculative decoding with rejection sampling | |

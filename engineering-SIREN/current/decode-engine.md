@@ -29,7 +29,15 @@ The engine runs inside the llama.cpp fork: `llama_context` hands decode ubatches
 - Device/queue: obtained from ggml-vulkan through a small accessor API added to the fork. JDE submits only
   when ggml's queue is idle (after `ggml_backend_synchronize`).
 
-## Execution model (v1)
+## Execution model (as built, 2026-10-16)
+
+Replayed command buffers per layer: A[il] = combine(il-1) + mixer + router (+ copy of x for the host),
+B[il] = shared expert + cached routed experts, F = combine + LM head. Per token: submit A[0], B[0]; for each
+layer the host waits A[il]'s fence, splits the routing (hits on GPU via the slot map, misses on CPU), runs
+the misses while B[il] executes, then submits A[il+1], B[il+1]. The doorbell/event design below does NOT work
+on gfx8 (L2 caches host memory, no mid-submission invalidation; host-set VkEvent waits hang) - kept for history.
+
+## Execution model (v1 plan)
 
 One pre-recorded command buffer per (window size, KV-length bucket), replayed every token. Per-token values
 (positions, KV cell, KV length) live in a small device buffer that the shaders read, so the command buffer
