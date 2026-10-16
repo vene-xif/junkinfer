@@ -111,3 +111,14 @@ Estimated GPU time ~8-10 ms/token (vs 23-32 ms in ggml). See `current/decode-eng
 blocks decoded from LDS. Correct on all shapes. Best per shape (REP=4 unless noted): 8192x2048 192 GB/s,
 4096x2048 191, 2048x4096 147 (REP=2), 512x2048 192, 2048x512 194. ~75% of peak, no repacked copy of the
 weights needed. Larger K stages more LDS and loses occupancy: double-buffering is the next tuning step.
+
+## 2026-10-16 — JDE v1: correct single-token decode
+
+VENE: the RTX 3090 fell off the bus at 05:53 (Xid 79, PCIe physical-layer AER errors) during the EXL3 3.5
+conversion; needs a reboot (user). IQ3_XXS quant failed (no imatrix data for the MTP block): MTP block now q8_0.
+BF16 routing-pass noise floor (fused vs unfused top-k): KL 0.0006-0.0025 across S1/S2/S3/L sets.
+
+JDE v1 (engine c2026523e+): every op of the decode step in custom Vulkan kernels, routed experts on the CPU,
+one GPU segment per layer (serial), command buffers recorded per token. Test: tiny160 row, b=1, IQ4_NL,
+`--cpu-moe --no-repack -fa on`: all tokens through JDE (0 ggml graph computes), KL 0.000689 vs the
+standard path with identical flags, top-1 95.8% (95 positions). Speed 21 t/s (= mainline). Correct first.

@@ -68,7 +68,7 @@ GPU op time ~25 ms/token with no experts on the GPU (should be ~8 ms). CPU exper
 
 ## Resume point (2026-10-16 ~01:00)
 
-JDE milestone 1-2 in progress (engine repo, branch junkinfer): accessor API in ggml-vulkan, 10 shaders in
+JDE milestones 1-3 DONE (v1 correct, KL 0.0007 vs llama.cpp); next: profile, hybrid GPU experts + overlap, replay (engine repo, branch junkinfer): accessor API in ggml-vulkan, 10 shaders in
 `src/junkinfer/shaders` (all compile for gfx803), `src/junkinfer/jde.h`. Next: `jde.cpp` host engine (per-layer
 GPU segments + CPU experts via ggml type traits, re-recorded per token), CMake shader build, hook in
 `llama_context::decode` before `process_ubatch`; gate: llama-junk-ref -b 1 compare, KL at the noise floor.
