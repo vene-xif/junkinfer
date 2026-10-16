@@ -375,3 +375,21 @@ Prefill still 131-141 t/s (IQ4_NL 274 on the same 2314-token prompt): the MoE op
 Hadamard -> synchronous whole-tensor fallback copies) and (b) --cpu-moe put the expert suh/svh on the CPU, so the
 per-token gathers (134 MB per tensor per ubatch) crossed PCIe. Fixed: callback finds the split's MUL_MAT_ID; scale
 vectors ignore the buffer overrides; expert scales stored F16 (lossless). Measurement pending.
+
+## 2026-10-17 (early) — EXL3 prefill fixed, elastic-slot NaN bug (pre-existing) fixed
+
+- **MUL_MAT_ID never used the native EXL3 kernel**: EXL3 has no ggml pipeline map, so ggml_vk_mul_mat_b_type
+  fell back to f16 B -> y_f32_kernel false -> dequant path. Forced f32 B on GCN (engine ae6e9ea47):
+  **prefill 131 -> 230 t/s** (2314 tokens, llama-completion; IQ4_NL 274). The other two suspects (expert-copy
+  callback, CPU-side scale gathers) were real but secondary; fixed in the same commit.
+- **Server, EXL3, 262k ctx, q8_0 KV (default serve.sh)**: prefill 247 t/s (6.6k), 220 t/s (29k); decode 21-27 t/s;
+  smoke_api ALL PASS.
+- **Garbage output after a long prompt ('////', '3333') - JDE bug since elastic slots, IQ4_NL too.** Repro: a 6.7k
+  request (fills elastic slots at low cells), then a 30k request. Expert data and slot maps verified intact
+  (JI_EL_VERIFY); cause: evicted slots keep expert bytes, the context then grows over them, and cells between the
+  used ones and the 256-padded n_kv are read by attention with a -inf mask - expert bytes decode to Inf/NaN q8_0
+  blocks, NaN + -inf = NaN, softmax poisoned for good. Fix (engine 8f8be4999): zero slots on eviction; guard limit
+  from the cache-wide used_max_p1 (a ubatch's n_kv covers only its streams: llama-server's short side decode had
+  n_kv 164 and re-activated slots under live cells). Both models now pass the sequence + smoke.
+- VENE unreachable since ~01:00 (ssh timeout): commits are backed up to bare repos on AUX-1 (`~/git-backup/*.git`,
+  remote `aux`); push to VENE when it is back.
