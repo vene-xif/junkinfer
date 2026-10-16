@@ -60,7 +60,7 @@ at short depth. Smoke numbers, one run each.
 | 3 | (IN PROGRESS) Decode engine JDE (`decode-engine.md`): native-layout kernels, CPU overlap, replayed command buffers | 21 -> 39 t/s, KL at floor; next: async cache update, LM head/router, MTP |
 | 2c | Overlap CPU misses with GPU hits; tune swap churn | |
 | 3 | Prefill expert streaming per layer with large ubatch (BELLS staging done right) | |
-| 4 | MTP speculative decoding with rejection sampling | |
+| 4 | MTP speculative decoding with rejection sampling | IMPLEMENTED (JDE verifies 1-4 tokens, server `--spec-type draft-mtp`), correct; not faster yet (MoE scaling, see log) - off by default |
 | 5 | KVarN KV cache on gfx803 (Vulkan) | |
 | 6 | Weight format by KLD gate: IQ4_XS / ik KT / EXL3 transcode | |
 | 7 | Sparse attention for decode (Quest-style) and prefill (XAttention-style), KLD-gated | |

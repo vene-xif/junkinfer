@@ -173,3 +173,24 @@ single-wave latency, not bandwidth; long context needs K staged through LDS (to 
 
 Server: `scripts/serve.sh` now runs JDE by default. Warm decode 42.9-46.3 t/s (256 tokens, temperature 0.7,
 real sampler), cold first request 34 t/s. API smoke ALL PASS.
+
+## 2026-10-16 (later) — multi-token JDE + MTP speculative decoding: correct, not yet a win
+
+Engine 892ab44cf+: JDE decodes ubatches of 1-4 tokens of one sequence (matvecs read weights once for all tokens,
+GDN runs the tokens sequentially with the state in registers and writes the rollback snapshots exactly like the
+graph path, attention/router/combine per token, CPU misses grouped by expert, logits per output token and the
+nextn hidden state for the MTP draft context). KL vs reference: ub1 0.00075, ub2 0.00054, ub3 0.00107,
+ub4 0.00065. The server runs `--spec-type draft-mtp` with JDE verifying (coherent text).
+
+| config (server, warm, 256 tokens) | t/s | notes |
+|---|---|---|
+| JDE, no MTP | 46.3 | 21.3 ms/token |
+| JDE + MTP draft 2 (verify 3) | 37.4 | acceptance 0.84/0.59, 2.43 tok/step; verify 46.5 ms + draft 9.3 ms (ggml) |
+| JDE + MTP draft 1 (verify 2) | 43.7 | acceptance 0.83, 1.83 tok/step; verify 33 ms + draft 5.6 ms |
+
+Why MTP does not pay here yet: only the dense part is shared between the verified tokens. Routed experts
+differ per token, so GPU hits and CPU misses grow ~linearly with the window (2-token step: GPU 22 ms vs 15.2,
+exposed CPU 7.5-9.6 ms vs 3.7). Even an ideal multi-token matvec leaves the 2-token step at ~33 ms + draft
+for 1.83 tokens ~ break-even. MTP becomes a win with (a) a higher expert hit rate (lower-bit experts at the
+KLD bar, or a second card), (b) the draft head inside JDE, (c) GPU reading part of the misses over PCIe
+concurrently with the CPU. Kept implemented, off by default.
