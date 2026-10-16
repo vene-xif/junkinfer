@@ -298,3 +298,23 @@ Larger ubatches give more rows per expert:
 
 Next for prefill: a GCN MoE GEMM for few rows per expert (weights-stationary, all of an expert's rows per
 workgroup) - MoE is ~60% of prefill time; at dense efficiency prefill would reach ~430 t/s.
+
+## 2026-10-16 (later) — prefill kernels
+
+- **GCN MUL_MAT_ID kernel** (engine f45f67a75+, `mul_mm_id_gcn.comp`): IQ4_NL x f32, 128x32 tiles, 4x4 register
+  blocks, drop-in for ggml's id-matmul (same row map/bindings). MoE GEMM 2.44 -> 1.99 s per 1024-token ubatch;
+  KL at floor. Variants tried: 8x4 blocks/128 threads (slower), row-per-thread with A in registers and no padding
+  FMAs (`GGML_VK_MMID_GCN=2`, slower). Default `GGML_VK_MMID_GCN=1`.
+- **Transpose-concat 64x64 tiles:** GDN conv concat 13 -> 7.7 ms per call at ub 2048 (32-wide tiles were bound by
+  DRAM locality: 128-byte segments from rows 32 KB apart).
+- Perf-logger caveat: it times ops only; copies recorded before an op are billed to it (checked: CONCAT's 13 ms
+  was the concat itself - unchanged with the prefetcher on).
+
+| llama-bench pp4096, ub 2048, pinned | t/s |
+|---|---|
+| start of the prefill work (ub 1024, mmap) | 205 |
+| pinned experts, ub 2048 | 350 |
+| + GCN MoE kernel + concat tiles | 353 |
+
+Server (262k q8_0 KV, ub 2048): prefill 306 t/s (6.7k), 291 t/s (33.6k, 115 s); decode 45 t/s warm, 39 t/s at 33.6k.
+Remaining prefill shares (ub 2048): MoE GEMM ~35%, dense GEMM ~25% (2.1 TFLOPS), FA ~5%, elementwise ~6%.
