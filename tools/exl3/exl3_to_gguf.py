@@ -97,6 +97,14 @@ def main():
         n = int(np.prod(shape)) * 4
         plan.append((name, list(shape), np.float32, n, None, lambda: np.ascontiguousarray(fn(), dtype=np.float32).reshape(shape)))
 
+    def add_f16(name, fn, shape):
+        n = int(np.prod(shape)) * 2
+        def get():
+            a = np.ascontiguousarray(fn())
+            assert a.dtype == np.float16, (name, a.dtype)
+            return a.reshape(shape)
+        plan.append((name, list(shape), np.float16, n, None, get))
+
     def exl3_parts(prefix):
         tr, _ = st.get(prefix + ".trellis")
         mcg = int(np.asarray(st.get(prefix + ".mcg")[0]).astype(np.int64).reshape(-1)[0]) & 0xFFFFFFFF
@@ -156,8 +164,9 @@ def main():
                 out[e] = np.transpose(t, (1, 0, 2))
             return out.view(np.uint8).reshape(n_expert, N, K * bits // 8)
         plan.append((gname + ".weight", [n_expert, N, K * bits // 8], np.uint8, nb, qt, tiles))
-        add_f32(gname + ".suh", lambda: np.stack([st.f32(p + ".suh") for p in pre]), [n_expert, K])
-        add_f32(gname + ".svh", lambda: np.stack([st.f32(p + ".svh") for p in pre]), [n_expert, N])
+        # routed-expert scales stay fp16 (as stored by exllamav3: lossless) - they live in VRAM next to the GPU ops
+        add_f16(gname + ".suh", lambda: np.stack([st.get(p + ".suh")[0] for p in pre]), [n_expert, K])
+        add_f16(gname + ".svh", lambda: np.stack([st.get(p + ".svh")[0] for p in pre]), [n_expert, N])
 
     # embeddings stay bf16
     emb, kind = st.get(P + "embed_tokens.weight")

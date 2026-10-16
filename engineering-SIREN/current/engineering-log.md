@@ -340,3 +340,38 @@ the full-tensor f16 dequant per matmul (incl. the 248k x 2048 LM head every toke
 
 Next: EXL3 in JDE (mat-vec kernels with the Hadamard/scale stages fused, expert slots, CPU misses), then an EXL3
 MoE GEMM (trellis decode inside the GCN tile loader instead of dequantizing every expert to f16 per ubatch).
+
+## 2026-10-16 (night) — EXL3 in JDE, native EXL3 GEMMs
+
+Model now on the SSD (`/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf`; user: run models only from the SSD -
+load 47 s instead of 3.5 min). Q4_K_S moved to `~/models/ssd-overflow/` for space.
+
+**JDE EXL3 decode** (engine a067e8c97, 19c0b591a): x3_prep (fused norm/swiglu input * suh, Hadamard-128; one
+workgroup per (row, 128-block)), x3_mv (trellis decode; one wave = 16 outputs x one K slice, independent waves,
+16-tile batches double-buffered through LDS, K split until >= 1024 waves), x3_post (slice sum, output Hadamard,
+svh). Expert scales: f16 table on the GPU (153 MiB) + host copy for the CPU. CPU misses: AVX2 4-bit decode
+(nibble-window trick) - only ~0.9 G weights/s/thread, so misses go zero-copy to the GPU instead: x3_mv_moe reads the
+first JI_X3_ZC (default 8) misses per token straight from the pinned expert tensor over PCIe (~5 GB/s effective);
+GPU and host apply the same rank rule. Greedy output identical across all splits and vs the graph path.
+
+| decode, 4k ctx, warm | ms/token | t/s |
+|---|---|---|
+| graph path (f16 dequant per matmul) | 1500 | 0.67 |
+| JDE, CPU misses | 57 | 14.2 |
+| + zero-copy misses, parallel prep, branch-free windows | 44 | 22.5 |
+| server 32k ctx (2nd request) | 37 | 26.6 |
+
+Pitfalls found: (1) the graph path's f16 dequant buffers (1 GB for the LM head) were allocated after JDE sized its
+cache -> RADV evicted weights to GTT -> everything at PCIe speed (profile showed 12 GB/s kernels). JDE's margin for
+EXL3 is now 1000 MiB. (2) A loop-carried register array for prefetch made ACO copy registers right after the loads
+(s_waitcnt vmcnt(0)): no overlap; fixed by explicit double buffering. (3) pgrep -f in a remote shell matched the
+shell itself - kill servers by PID from `ps ... | grep "[b]in/llama-server"`.
+
+**Native EXL3 GEMMs for prefill** (mul_mm_gcn_exl3.comp, MUL_MAT + MUL_MAT_ID): trellis tiles staged in LDS and
+decoded into the A tile, no f16 copy of the weights; BN 64 (default) halves decode per FMA: dense EXL3 GEMMs now
+faster than IQ4_NL's (8192x2048 per 2048-token ubatch: 19.8 ms vs 20.5). Output identical to the dequant path.
+Prefill still 131-141 t/s (IQ4_NL 274 on the same 2314-token prompt): the MoE ops were 2x IQ4_NL's because
+(a) sched_copy_experts only handled splits starting with the MUL_MAT_ID (EXL3 splits start with the suh multiply /
+Hadamard -> synchronous whole-tensor fallback copies) and (b) --cpu-moe put the expert suh/svh on the CPU, so the
+per-token gathers (134 MB per tensor per ubatch) crossed PCIe. Fixed: callback finds the split's MUL_MAT_ID; scale
+vectors ignore the buffer overrides; expert scales stored F16 (lossless). Measurement pending.
