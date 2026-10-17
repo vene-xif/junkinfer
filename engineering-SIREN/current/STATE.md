@@ -20,6 +20,8 @@ Targets (dev box AUX-1; see README for the table):
   239 t/s (29k); decode 18-27 t/s (JDE: EXL3 mat-vec kernels, zero-copy GPU misses); smoke_api ALL PASS.
   IQ4_NL for comparison: prefill 353 / 267, decode 28-46. Quality vs BF16 not measured yet (VENE GPU).
   (2026-10-17: expert uploads now overlap compute - weight prefetcher with alias mode + narrow copy shader.)
+  (2026-10-17: own GCN prefill flash-attention kernel, default on: FA -25%; EXL3 prefill 337 t/s at 6.6k,
+  262 t/s at 37k with no prefix reuse (233 with ggml's FA).)
 - JDE elastic-slot NaN bug (garbage after a long prompt that follows an earlier request) fixed 2026-10-17.
 
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**

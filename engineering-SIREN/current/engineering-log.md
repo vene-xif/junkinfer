@@ -444,3 +444,22 @@ IQ4_NL 353 / 267 / 392. All outputs correct, smoke ALL PASS.
   4.0 s vs 2.6 s, also 256 VGPRs). Next: a lower-register FA design (this is the long-context prefill limiter).
 - Other prefill experiments kept as opt-in knobs (slower here): 128-column / 128-thread EXL3 GEMM tiles,
   dense EXL3 via f16 dequant + ggml GEMM (GGML_VK_EXL3_DQ_MIN), ubatch 4096 now only +5% (uploads hidden).
+
+## 2026-10-17 (evening) — own prefill flash attention beats ggml's (engine bbb79e5c1)
+
+`ji_fa_prefill.comp`, now default on GCN (`JI_FA=0` disables). FA time on the 8k EXL3 prompt (sum of FLASH_ATTN_EXT,
+perf logger), output hash identical in every row:
+
+| version | design | VGPRs / waves per SIMD | FA |
+|---|---|---|---|
+| ggml scalar | — | 256 / 1 | 2.69 s |
+| v5-v7 | 32 rows/WG, 2-row x 4-key thread tiles, conflict-free LDS, prefetch | 84-128 / 2-3 | 4.9-5.2 s |
+| v8 | 64 rows/WG, 4-row tiles, Q/K/V register prefetch | 256 / 1 | 3.02 s |
+| v8 trimmed | no prefetch, to fit 128 VGPRs | 128 / 2 | 3.26-3.30 s |
+| **v9** | 128 rows/WG (16 positions x 8 heads), 8-row x 4-key S / 8-row x 16-dim O tiles, prefetch | 256 / 1, no spills | **2.01-2.08 s** |
+
+Lesson: on gfx8 the FA inner loops are bound by LDS dwords per FMA (LDS feeds 32 dwords/clk/CU vs 64 FMA/clk);
+2-row tiles gave ~1.6 FMA/dword and lost despite 3x the occupancy. 8-row tiles give 2.7 (QK) and 5.3 (PV): the ISA
+now has 2048 v_mac per 288 LDS reads (b64; ACO did not emit b128 even with 16-byte-aligned strides - that variant
+was 2% slower). Register prefetch of the next chunk matters more than a second wave. DC=64 spills; VC 8 vs 16 same.
+Server (262k ctx, q8_0 KV): smoke ALL PASS, prefill 6.6k 310 -> 337 t/s, 37k no-reuse 233 -> 262 t/s (+12%).
