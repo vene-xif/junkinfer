@@ -541,3 +541,21 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
   softmax/barriers at ~60% of the time (V alone ~72 GB/s: 3 scattered dword loads per cell per lane, little
   latency hiding at ~2 waves per SIMD). Removed; next step there: LDS-staged coalesced V (uvec4 rows) with
   prefetch across cell batches.
+
+## 2026-10-18 — long-context prefill fixes: GPU job timeout, KV-cache eviction (engine d2bb420c3)
+
+- **Device lost at ~80k cells (ub 4096).** dmesg: "ring comp_1.x.0 timeout, but soft recovered" - this system's
+  amdgpu soft-recovers a GPU job after ~2 s (no lockup_timeout on the cmdline); one prefill flash-attention dispatch
+  at 80k cells x 4096 queries takes ~2 s. llama-graph now splits prefill FA into query-row chunks of <= ~1 TFLOP
+  (JI_FA_SPLIT_GFLOP, default 1000); separate nodes are separate submissions (ggml-vulkan already caps a submission
+  at 200 GFLOP), a balanced concat tree joins the chunks. 8k with forced 100-GFLOP chunks: identical output, +6% FA.
+- **3x slower prefill past 64k cells (server only, intermittent).** ggml-vulkan converted the whole q8_0 K/V into
+  an f16 scratch (prealloc_x) before every FA call; the scratch grows with the context (512 MiB at 262k) and is
+  allocated lazily, long after JDE sized its expert cache to fill VRAM -> VRAM over-committed -> the kernel evicted
+  the 2.7 GB KV cache to GTT (VRAM trace: -2710 MiB, GTT +2710 MiB) and everything after ran over PCIe. Fix: a q8_0
+  variant of ji_fa reads the KV cache directly (34-byte blocks dequantised while staging, 4 threads per key row for
+  coalescing), decided before the split-k / mask-opt / dequant scratch of the other paths. No context-sized
+  scratch any more; 8k FA 2079 -> 2153 ms, output identical.
+- Server, 262k ctx, ub 4096: **116k-token prompt: prefill 161 t/s (718 s), decode at that depth 20.1 t/s** (was
+  15.7 at ub 2048), VRAM stable, no device lost. `scripts/big_bench.py N`: near-full-context prompt from the engine
+  sources.
