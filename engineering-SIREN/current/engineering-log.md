@@ -559,3 +559,7 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
 - Server, 262k ctx, ub 4096: **116k-token prompt: prefill 161 t/s (718 s), decode at that depth 20.1 t/s** (was
   15.7 at ub 2048), VRAM stable, no device lost. `scripts/big_bench.py N`: near-full-context prompt from the engine
   sources.
+- **Near-full context validated** (`scripts/big_bench.py 245000`): 246,894-token prompt, prefill 90.6 t/s
+  (2724 s), decode at that depth 13.7 t/s, coherent answer, no device lost, VRAM/GTT stable. Per-4096-token
+  ubatch: 10 s at the start -> 80 s at 240k cells, ~78% of it flash attention at ~2.6 TFLOPS (about half of
+  fp32 peak; gfx803 has no packed-f16 or int8-dot instructions) - exact attention is the long-context limit.

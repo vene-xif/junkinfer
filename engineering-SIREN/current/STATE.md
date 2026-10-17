@@ -26,6 +26,9 @@ Targets (dev box AUX-1; see README for the table):
   after the EXL3 cache margin cut, 1830 MiB expert cache.)
   (2026-10-18: + compute-buffer expert slots, one-shot tokens: decode ~36 t/s short, ~21-23 t/s at 37k.)
   (2026-10-18: serve.sh ub 4096 + 3.75 GiB suballocation blocks: prefill 394 t/s at 6.6k, 298 at 37k.)
+  (2026-10-18 later: decode 44 t/s short (stripe-major EXL3 mat-vecs, fused output stage); 247k-token prompt:
+  prefill 90.6 t/s, decode 13.7 t/s at that depth; 116k: 161 / 20.1 t/s. Long-context fixes: FA query chunks
+  (2 s GPU job timeout), q8_0 KV read directly by the FA kernel (no context-sized scratch -> no KV eviction).)
 - JDE elastic-slot NaN bug (garbage after a long prompt that follows an earlier request) fixed 2026-10-17.
 
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**
