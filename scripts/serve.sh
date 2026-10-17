@@ -23,12 +23,16 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
   # of RAM (16 GB on AUX-1); AUX-1 boots with ttm.pages_limit=6291456 amdgpu.gttsize=24576 (24 GB).
   export JI_DECODE=1 JI_CACHE_MIB=${JI_CACHE_MIB:-auto} JI_CACHE_SWAPS=${JI_CACHE_SWAPS:-2}
   UB=${JI_UBATCH:-4096}
+  # JI_SLOT_DIR: enables slot save/restore (POST /slots/0?action=save|restore {"filename": ...}) - a prefilled deep
+  # context can be kept on disk and restored in seconds instead of minutes of prefill
+  SLOT_ARGS=()
+  [ -n "${JI_SLOT_DIR:-}" ] && SLOT_ARGS=(--slot-save-path "$JI_SLOT_DIR")
   exec "$ENGINE/llama-server" -m "$MODEL" \
     -ngl 99 --cpu-moe --no-repack --load-mode none -fa on --fit off \
     -c "${JI_CTX:-262144}" -ctk q8_0 -ctv q8_0 \
     -np 1 --jinja -t "${JI_THREADS:-6}" -b "$UB" -ub "$UB" \
     --host "${JI_HOST:-127.0.0.1}" --port "${JI_PORT:-8080}" \
-    "$@"
+    "${SLOT_ARGS[@]}" "$@"
 fi
 # JI_ENGINE=ggml: tuned mainline llama.cpp Vulkan path (MVP v0), q8_0 KV, full 262k context
 exec "$ENGINE/llama-server" -m "$MODEL" \
