@@ -516,3 +516,17 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
 - Prep fused into the EXL3 decode mat-vec (JI_X3_FUSEP=1, opt-in): output identical but slower (35.9 -> 38.8 ms
   per token; every wave redoes its slice's transform and the row's rms). The barrier itself is not the big cost
   (JI_BARRIER_LITE within noise).
+- **EXL3 dense mat-vecs were DRAM-page bound** (engine 9936606a6). JI_BENCH showed the small shapes at 45-63 GB/s
+  while the LM head streamed at 157; trivial decode math or no decode at all barely changed them, an address skew
+  (channel camping test) neither. Cause: slice-major wave order - the waves in flight read different stripes
+  16 KB apart. Stripe-major order (consecutive waves = consecutive K slices = consecutive memory) and K split down
+  to one 16-tile batch per wave: 8192x2048 133 -> 88 us, 2048x4096 97 -> 55, 4096x2048 77 -> 53.
+  **Server decode 36.9 -> 42.6-43.4 t/s** short, 24.4 t/s at 37k.
+- MoE mat-vecs (~8.7 ms per token) are PCIe-bound by the zero-copy misses: with JI_X3_ZC=0 the GPU MoE kernels
+  drop 73 -> 34 us per call; ~45 missed experts per token = ~68 MB at ~14 GB/s. Misses-first row order, CPU
+  sharing of misses (ZC 2/4) and the cache swap rate (2/8/16) did not help. Next ideas: expert prediction /
+  prefetch for the next layer, more cache.
+- MTP sidecar (`-md mtp-Q4_0.gguf --spec-type draft-mtp`, the EXL3 GGUF has no MTP block): needs
+  --spec-draft-n-ubatch 256 (the draft context's 262k mask otherwise overcommits VRAM: "Not enough memory for
+  command submission" -> DeviceLost). Acceptance 0.68 but 10.6 t/s: the 2-token verify takes ~114 ms (apparently
+  the graph path, not JDE) and the draft ~42 ms on the graph path. Parked; a JDE-native draft head is the way.
