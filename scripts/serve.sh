@@ -11,16 +11,18 @@ export RADV_PERFTEST=${RADV_PERFTEST-nogttspill}
 
 if [ "${JI_ENGINE:-jde}" = jde ]; then
   # JunkInfer decode engine (JDE): custom Vulkan decode, experts in host RAM + an adaptive VRAM expert cache sized
-  # from the VRAM left after weights, KV cache and compute buffers (JI_CACHE_MIB=auto). q8_0 KV (with llama.cpp's
-  # Hadamard rotation, which JDE implements) at the full 262k context. Prefill stays on the ggml path. ubatch 2048
-  # is the measured sweet spot at 262k: MoE GEMMs get more rows per expert (prefill 302 t/s on 6.7k, 293 on 33.6k)
-  # while JDE's elastic expert slots in the unused KV tail keep decode at ~46 t/s; 4096 is faster on short prompts
-  # (344) but slower at depth and on decode (KQ mask/scores scale with ctx x ubatch).
+  # from the VRAM left after weights, KV cache and compute buffers (JI_CACHE_MIB=auto), plus elastic expert slots
+  # in the unused KV tail and in the ggml compute buffer (idle while JDE decodes). q8_0 KV (with llama.cpp's
+  # Hadamard rotation, which JDE implements) at the full 262k context. Prefill stays on the ggml path.
+  # ubatch 4096 (Oct 2026): fuller MoE GEMM tiles (EXL3 prefill 394 t/s on 6.6k vs 361 at 2048, 298 vs 278 at 37k);
+  # its larger compute buffer (2.75 GiB, mostly the KQ mask) costs decode nothing because JDE uses it for expert
+  # slots - which needs one buffer: ggml's 1 GiB suballocation blocks are raised to 3.75 GiB (RADV allows 4 GiB).
+  export GGML_VK_SUBALLOCATION_BLOCK_SIZE=${GGML_VK_SUBALLOCATION_BLOCK_SIZE:-4026531840}
   # --load-mode none puts the CPU experts in pinned host memory, so op-offload uploads are async DMA instead of
   # staged synchronous copies (prefill +35%). Needs a GTT limit above the expert size: the kernel default is half
   # of RAM (16 GB on AUX-1); AUX-1 boots with ttm.pages_limit=6291456 amdgpu.gttsize=24576 (24 GB).
   export JI_DECODE=1 JI_CACHE_MIB=${JI_CACHE_MIB:-auto} JI_CACHE_SWAPS=${JI_CACHE_SWAPS:-2}
-  UB=${JI_UBATCH:-2048}
+  UB=${JI_UBATCH:-4096}
   exec "$ENGINE/llama-server" -m "$MODEL" \
     -ngl 99 --cpu-moe --no-repack --load-mode none -fa on --fit off \
     -c "${JI_CTX:-262144}" -ctk q8_0 -ctv q8_0 \

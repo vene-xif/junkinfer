@@ -507,3 +507,12 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
   x3_mv K-split sweep (per-shape optimum within a few % of the default).
 - Decode profile now (4k ctx, llama-completion): ~29 ms GPU per token; dense EXL3 mat-vecs ~14.6 ms (8192x2048
   155 us = 54 GB/s: latency/ALU bound, ~2.6x the bandwidth bound), routed experts ~7.5 ms, LM head 2.4 ms.
+- **ubatch 4096 is now the server default.** ggml-vulkan's 1 GiB suballocation blocks split the KV cache (3
+  buffers) and the compute buffer (chunks; JDE uses only the largest). RADV allows 4 GiB allocations and binding
+  ranges: serve.sh sets GGML_VK_SUBALLOCATION_BLOCK_SIZE=3.75 GiB. Then the compute buffer is one chunk and fully
+  usable for decode expert slots, so ub 4096's bigger buffer (2.75 GiB, mostly the KQ mask) costs decode nothing:
+  ub 2048 = 1137 bank + 1002 compute-buffer slots, ub 4096 = 302 + 1834 (plus 1780 KV-tail slots either way).
+  Server: prefill 6.6k 361 -> 394 t/s, 37k 278 -> 298 t/s; decode 36.9 t/s short, 22.6 t/s at 37k; smoke ALL PASS.
+- Prep fused into the EXL3 decode mat-vec (JI_X3_FUSEP=1, opt-in): output identical but slower (35.9 -> 38.8 ms
+  per token; every wave redoes its slice's transform and the row's rms). The barrier itself is not the big cost
+  (JI_BARRIER_LITE within noise).
