@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Prefill/decode at near-full context: concatenates source files of the engine (C/C++ and docs) until ~N tokens
+"""usage: big_bench.py [N=250000] [gen=64] [cache]
+Prefill/decode at near-full context: concatenates source files of the engine (C/C++ and docs) until ~N tokens
 (~3.3 chars/token for code), asks for a short summary, prints the server timings."""
 import glob, json, sys, urllib.request
 n_tok = int(sys.argv[1]) if len(sys.argv) > 1 else 250000
+n_gen = int(sys.argv[2]) if len(sys.argv) > 2 else 64
+cache = len(sys.argv) > 3 and sys.argv[3] == "cache"   # keep / reuse the server's prompt cache (saved-KV depth tests)
 text = ""
 for pat in ["engine/docs/**/*.md", "engine/src/**/*.cpp", "engine/ggml/src/ggml-vulkan/*.cpp", "engine/common/*.cpp", "engine/tools/**/*.cpp"]:
     for p in sorted(glob.glob(pat, recursive=True)):
@@ -11,7 +14,7 @@ for pat in ["engine/docs/**/*.md", "engine/src/**/*.cpp", "engine/ggml/src/ggml-
     if len(text) > n_tok * 3.3: break
 text = text[: int(n_tok * 3.3)]
 body = {"messages": [{"role": "user", "content": text + "\n\nIn two sentences, what is this code base?"}],
-        "max_tokens": 64, "temperature": 0.0, "cache_prompt": False, "chat_template_kwargs": {"enable_thinking": False}}
+        "max_tokens": n_gen, "temperature": 0.0, "cache_prompt": cache, "chat_template_kwargs": {"enable_thinking": False}}
 req = urllib.request.Request("http://127.0.0.1:8080/v1/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
 with urllib.request.urlopen(req, timeout=10800) as r:
     d = json.loads(r.read()); t = d["timings"]
