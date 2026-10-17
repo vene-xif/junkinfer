@@ -530,3 +530,14 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
   --spec-draft-n-ubatch 256 (the draft context's 262k mask otherwise overcommits VRAM: "Not enough memory for
   command submission" -> DeviceLost). Acceptance 0.68 but 10.6 t/s: the 2-token verify takes ~114 ms (apparently
   the graph path, not JDE) and the draft ~42 ms on the graph path. Parked; a JDE-native draft head is the way.
+- **EXL3 mat-vec output stage fused** (engine b9d206337, default on, JI_X3_FUSEQ=0 off): the last of a 128-output
+  block's 8 x KS waves (atomic arrival counter) sums the slices, applies the output Hadamard and svh. With
+  memoryBarrierBuffer (L1 invalidate in every wave) it was slower than x3_post; release on the atomic + acquire
+  only in the winning wave: 30.6-30.9 -> 29.3-29.9 ms per token. **Server decode 44.0-44.4 t/s.**
+- Router: one expert row per wave (34.7 -> 30.2 us per layer).
+- Decode attention at depth (q8_0 KV, attn_long ~1.42 ms per layer at 116k = ~89 GB/s, ~14 ms per token):
+  timing variants: without K loads -5%, without V loads -25%; a lane-per-cell rewrite (query heads via scalar
+  loads, software-pipelined) was correct but slower (544 vs 507 us at 36k) and showed the V phase + per-pass
+  softmax/barriers at ~60% of the time (V alone ~72 GB/s: 3 scattered dword loads per cell per lane, little
+  latency hiding at ~2 waves per SIMD). Removed; next step there: LDS-staged coalesced V (uvec4 rows) with
+  prefetch across cell batches.
