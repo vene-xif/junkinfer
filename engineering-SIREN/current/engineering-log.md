@@ -426,3 +426,21 @@ kernels do not implement - EXL3 matmuls are excluded from op fusion.
 
 Server, 262k ctx, q8_0 KV, prefetcher on: EXL3 prefill 310 t/s (6.6k), 239 (29k, prefix reuse), smoke 328;
 IQ4_NL 353 / 267 / 392. All outputs correct, smoke ALL PASS.
+
+## 2026-10-17 (later) — decode batching, CPU trellis decode, FA findings (engine 377945a41, db3677f2f)
+
+- **EXL3 decode, batched mat-vecs**: weights sharing an input (wqkv + gate, q/k/v, shexp + routed gate/up, the two
+  downs) share one prep -> barrier -> mv -> barrier -> post sequence (6 slots of xp / partial buffers).
+  39.4 -> 34.3 ms/token at 4k (23.6 -> 26.6 t/s); server 262k: ~25 t/s.
+- **CPU EXL3 decode 2.25x** (0.87 -> 1.96 G weights/s/thread): X vectors built once per call, byte swap by shuffle,
+  F16C + hadd instead of integer fp16 conversion, per-position-group register accumulators over all K tiles,
+  token count as template parameter (a runtime nx kept the accumulators on the stack). In JDE: 3.9 GB/s.
+  Zero-copy split: JI_X3_ZC 4..8 equal at 4k and 262k (few misses per token, CPU time gets exposed) - default 8.
+- **Prefill at depth is FA-bound**: 33k-token prefill, GPU 137 s: FA 37%, MoE GEMM 28%, dense EXL3 GEMM 20%.
+  ggml's scalar FA (D=256) runs at ~1.8 TFLOPS; it uses 256 VGPRs (one wave per SIMD). Tried, all output-identical
+  and none faster: tile overrides (GGML_VK_FA_BR/BC/DSPLIT/RSPLIT; Bc 64 -2%), GQA folding of the 8 query heads
+  into rows so K/V is read once per KV head (JI_FA_GQA_FOLD=1; FA time unchanged -> not K/V-traffic bound), and a
+  first custom kernel ji_fa_prefill.comp (JI_FA=1; 64 rows per workgroup, register-tiled QK/PV, online softmax;
+  4.0 s vs 2.6 s, also 256 VGPRs). Next: a lower-register FA design (this is the long-context prefill limiter).
+- Other prefill experiments kept as opt-in knobs (slower here): 128-column / 128-thread EXL3 GEMM tiles,
+  dense EXL3 via f16 dequant + ggml GEMM (GGML_VK_EXL3_DQ_MIN), ubatch 4096 now only +5% (uploads hidden).
