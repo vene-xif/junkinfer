@@ -485,3 +485,25 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
 (8.0 -> 11.9% of experts), decode on a short chat 21 -> 28-32 t/s. 116k-token prompt (server, no reuse): prefill
 159.5 t/s (726 s), decode 15.7 t/s at that depth, VRAM peak 8184/8192 MiB, no evictions; smoke ALL PASS
 (6.6k prefill 361 t/s). Next: the 1.4 GiB ggml compute buffer (mostly the KQ mask) is idle during JDE decode.
+
+## 2026-10-18 — decode: compute-buffer expert slots, one-shot tokens, long-context attention (engine 0b653f381 .. 5b6aeaf13)
+
+- **Elastic expert slots in the ggml compute buffer.** The Vulkan compute buffer (1.4 GiB at 262k / ub 2048, mostly
+  the KQ mask) is idle while JDE decodes. Its largest chunk (the buffer is split at the 1 GiB allocation limit) is
+  carved into 682 expert slots (1023 MiB) as a 4th elastic buffer (binding 10 of the MoE mat-vecs). Evicted before
+  anything the graph path writes there (process_ubatch, graph_compute, memory updates that run a graph), retired
+  if the buffer is reallocated; fills prefer stable slots. Bug on the way: memory_update() runs at every decode()
+  call - evicting there wiped the slots every token (fills went to them first, so the cache stayed empty);
+  the evict now runs only when an update graph is due. JI_EL_VERIFY: 11046 cached tensors, 0 mismatches across
+  decode/prefill alternation. Server: decode short 28-32 -> 31-36 t/s, at 37k 18.0 -> 22.7 t/s.
+- **One-shot tokens (EXL3).** With JI_X3_ZC >= n_used every miss runs zero-copy on the GPU, so the per-layer host
+  handshake (wait for the router, classify, submit: 81 submits per token) only fed the cache statistics. Per-layer
+  routing records (ro_host = n_layer x 256 B) let the whole token go in one vkQueueSubmit; statistics are read
+  after the fence. Output identical; llama-completion 29.0 -> 30.8 t/s; server short decode ~36.5 t/s.
+- **attn_long** (decode attention, n_kv > 8192): the score loop was LDS-bound (one Q vec4 per 4 FMAs); two cells
+  per lane quad + 256-cell passes / 256 chunks: q8_0 KV per layer 36k 650 -> 510 us, 116k 2283 -> 1413 us.
+- Tried, no gain: the trellis mcg multiply as 24/16-bit multiplies (v_mul_lo_u32 is 1/4 rate on GCN; removed from
+  the ISA via a 16-bit multiply, but decode and prefill times unchanged - not the limiter); JDE CPU threads 6/9/12;
+  x3_mv K-split sweep (per-shape optimum within a few % of the default).
+- Decode profile now (4k ctx, llama-completion): ~29 ms GPU per token; dense EXL3 mat-vecs ~14.6 ms (8192x2048
+  155 us = 54 GB/s: latency/ALU bound, ~2.6x the bandwidth bound), routed experts ~7.5 ms, LM head 2.4 ms.

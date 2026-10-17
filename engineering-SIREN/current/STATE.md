@@ -24,6 +24,7 @@ Targets (dev box AUX-1; see README for the table):
   262 t/s at 37k with no prefix reuse (233 with ggml's FA).)
   (2026-10-17 night: prefill 361 t/s at 6.6k, 275 at 37k, 160 at 116k; decode 28-32 t/s short, 16 t/s at 116k
   after the EXL3 cache margin cut, 1830 MiB expert cache.)
+  (2026-10-18: + compute-buffer expert slots, one-shot tokens: decode ~36 t/s short, ~21-23 t/s at 37k.)
 - JDE elastic-slot NaN bug (garbage after a long prompt that follows an earlier request) fixed 2026-10-17.
 
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**
