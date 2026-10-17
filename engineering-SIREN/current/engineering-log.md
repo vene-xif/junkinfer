@@ -393,3 +393,36 @@ vectors ignore the buffer overrides; expert scales stored F16 (lossless). Measur
   n_kv 164 and re-activated slots under live cells). Both models now pass the sequence + smoke.
 - VENE unreachable since ~01:00 (ssh timeout): commits are backed up to bare repos on AUX-1 (`~/git-backup/*.git`,
   remote `aux`); push to VENE when it is back.
+
+## 2026-10-17 — prefill: fused EXL3 op, expert uploads overlapped (engine bb1b388a8)
+
+Profile (8k prompt, ub 2048, EXL3): GPU kernels 22.2 s, wall 27.7 s; skipping expert uploads (debug) -> wall 22.3 s.
+So ~20% of prefill was expert DMA serialized with compute. Causes, in order of discovery:
+1. ggml-backend sched synchronizes the split backend before every input copy when it has no events (one GPU, no
+   pipeline parallelism): 120 GPU drains per ubatch (host profile: one ~55 ms fence wait per split). Skipped for
+   host weights handed to the copy callback (same queue, barrier-ordered).
+2. With the drains gone, uploads still alternate with compute on the same queue. Uploading on the transfer queue
+   (GGML_VK_ASYNC_USE_TRANSFER_QUEUE) gave +13% but WRONG output (write-after-read on the reused input buffer).
+3. The old weight prefetcher (2 staging slots, learned order) hit 356/476 uploads but gained nothing: (a) the
+   slot -> input-tensor copy; fixed by alias mode (the MUL_MAT_ID binds the slot; expert uploads flagged via
+   ggml_backend_vk_expert_upload_hint - a 16 MB non-expert alias was never resolved and blocked the slots);
+   (b) the DMA itself slowed the GEMMs by its own duration: RADV on gfx8 runs large vkCmdCopyBuffer as a compute
+   shader (GFX10+ use CP DMA for GTT), whose PCIe-stalled waves occupy every CU. CP DMA (regions < 4096 B) does not
+   disturb compute but is too slow (wall 34 s). Fix: pf_copy.comp with 4 workgroups (8 uvec4 loads in flight per
+   lane): DMA hidden, kernels +1%.
+
+| 8k prompt, ub 2048 | wall | t/s |
+|---|---|---|
+| EXL3, before | 27.2 s | 279 |
+| EXL3, prefetch (vkCmdCopyBuffer) | 27.8 s | 273 |
+| EXL3, prefetch, copy shader 4 WGs | 24.0 s | 316 |
+| IQ4_NL before / after | 23.9 / 19.8 s | 319 / 384 |
+
+Fused EXL3 linear: the suh gather/multiply, the two Hadamard-128 f32 matmuls and the svh multiply ran as separate
+ggml ops (1.25 s per 2048-token ubatch, [K, 8, T] intermediates of 134 MB); now one MUL_MAT(_ID) node, the Vulkan op
+does prep (register FWHT) + trellis GEMM + epilogue (Hadamard over the 128-row tile, svh). 5.88 -> 5.3 s GPU per
+ubatch. Bug on the way: ggml-vulkan fused the following residual ADD into the matmul (MUL_MAT+ADD), which the EXL3
+kernels do not implement - EXL3 matmuls are excluded from op fusion.
+
+Server, 262k ctx, q8_0 KV, prefetcher on: EXL3 prefill 310 t/s (6.6k), 239 (29k, prefix reuse), smoke 328;
+IQ4_NL 353 / 267 / 392. All outputs correct, smoke ALL PASS.

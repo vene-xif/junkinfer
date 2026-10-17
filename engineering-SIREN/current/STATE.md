@@ -16,9 +16,10 @@ Targets (dev box AUX-1; see README for the table):
 ## Where we are (2026-10-16)
 
 - **EXL3 served end to end** (community EXL3 4.0 bpw, `tools/exl3/exl3_to_gguf.py` -> 17.2 GiB GGUF on the SSD):
-  `scripts/serve.sh /mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf` at 262k / q8_0 KV: prefill 247 t/s (6.6k),
-  220 t/s (29k); decode 21-27 t/s (JDE: EXL3 mat-vec kernels, zero-copy GPU misses); smoke_api ALL PASS.
-  IQ4_NL for comparison: prefill 300 / 264, decode 28-46. Quality vs BF16 not measured yet (VENE GPU).
+  `scripts/serve.sh /mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf` at 262k / q8_0 KV: prefill 310 t/s (6.6k),
+  239 t/s (29k); decode 18-27 t/s (JDE: EXL3 mat-vec kernels, zero-copy GPU misses); smoke_api ALL PASS.
+  IQ4_NL for comparison: prefill 353 / 267, decode 28-46. Quality vs BF16 not measured yet (VENE GPU).
+  (2026-10-17: expert uploads now overlap compute - weight prefetcher with alias mode + narrow copy shader.)
 - JDE elastic-slot NaN bug (garbage after a long prompt that follows an earlier request) fixed 2026-10-17.
 
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**
