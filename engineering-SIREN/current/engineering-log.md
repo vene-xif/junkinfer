@@ -563,3 +563,9 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
   (2724 s), decode at that depth 13.7 t/s, coherent answer, no device lost, VRAM/GTT stable. Per-4096-token
   ubatch: 10 s at the start -> 80 s at 240k cells, ~78% of it flash attention at ~2.6 TFLOPS (about half of
   fp32 peak; gfx803 has no packed-f16 or int8-dot instructions) - exact attention is the long-context limit.
+- **attn_long: wave-local online softmax, 512-cell passes** (engine bde6cbc62): no workgroup barriers per pass;
+  245k cells 4.81 -> 3.72 ms per layer.
+- **Depth tests from saved KV contexts** (user suggestion): serve.sh JI_SLOT_DIR enables slot save/restore;
+  `scripts/depth_kv.sh N` restores depth_N.bin (or prefills once and saves; 116k = 1.46 GB, save 0.8 s, restore
+  0.3 s). Warm decode at depth (restored, second request): **37k 33.9 t/s, 116k 23.9 t/s** - the earlier
+  25 / 20 t/s figures were cold expert caches right after a prefill.
