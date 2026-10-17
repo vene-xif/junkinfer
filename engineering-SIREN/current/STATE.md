@@ -22,6 +22,8 @@ Targets (dev box AUX-1; see README for the table):
   (2026-10-17: expert uploads now overlap compute - weight prefetcher with alias mode + narrow copy shader.)
   (2026-10-17: own GCN prefill flash-attention kernel, default on: FA -25%; EXL3 prefill 337 t/s at 6.6k,
   262 t/s at 37k with no prefix reuse (233 with ggml's FA).)
+  (2026-10-17 night: prefill 361 t/s at 6.6k, 275 at 37k, 160 at 116k; decode 28-32 t/s short, 16 t/s at 116k
+  after the EXL3 cache margin cut, 1830 MiB expert cache.)
 - JDE elastic-slot NaN bug (garbage after a long prompt that follows an earlier request) fixed 2026-10-17.
 
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**

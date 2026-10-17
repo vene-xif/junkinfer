@@ -463,3 +463,25 @@ Lesson: on gfx8 the FA inner loops are bound by LDS dwords per FMA (LDS feeds 32
 now has 2048 v_mac per 288 LDS reads (b64; ACO did not emit b128 even with 16-byte-aligned strides - that variant
 was 2% slower). Register prefetch of the next chunk matters more than a second wave. DC=64 spills; VC 8 vs 16 same.
 Server (262k ctx, q8_0 KV): smoke ALL PASS, prefill 6.6k 310 -> 337 t/s, 37k no-reuse 233 -> 262 t/s (+12%).
+
+## 2026-10-17 (night) — prefill memory-path fixes, bigger EXL3 expert cache (engine 39bbe772d .. HEAD)
+
+8k prompt (7605 tokens), llama-completion, ub 2048 unless noted:
+
+| change | prefill |
+|---|---|
+| own FA kernel (above) | 323 t/s |
+| concat_transpose grid walks the contiguous dim first (GDN conv window; 7.8 -> 0.94 ms per ubatch: all running workgroups read src1 rows at a 32 KB stride = one memory channel) | 334 |
+| MoE routing weights in the fused EXL3 down-projection epilogue (drops a 3.4 ms MUL per ubatch) | 341 |
+| waves skip FMAs of empty expert-tile columns; epilogue skips empty 32-column groups | 349 |
+| (ub 4096 / 8192, same build) | 384 / 402 |
+
+MoE GEMM analysis: GGML_VK_MMID_STATS=1 shows 16384 rows in ~386 64-column tiles (66% full) at ub 2048; prep is
+~6% of the op (JI_X3_TDBG); per useful FMA the MoE GEMM runs at the dense kernel's ~3.1 TFLOPS - the loss is
+padding. 32-column tiles (GGML_VK_EXL3_MBN=32) are slower overall. Larger ubatches fill tiles (MoE -18% at 4096)
+but the server keeps 2048: the 262k KQ mask (ctx x ubatch f16, 1 GiB at 2048) is reserved in VRAM.
+
+JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now: expert cache 1230 -> 1830 MiB
+(8.0 -> 11.9% of experts), decode on a short chat 21 -> 28-32 t/s. 116k-token prompt (server, no reuse): prefill
+159.5 t/s (726 s), decode 15.7 t/s at that depth, VRAM peak 8184/8192 MiB, no evictions; smoke ALL PASS
+(6.6k prefill 361 t/s). Next: the 1.4 GiB ggml compute buffer (mostly the KQ mask) is idle during JDE decode.
