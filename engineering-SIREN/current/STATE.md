@@ -29,6 +29,7 @@ Targets (dev box AUX-1; see README for the table):
   (2026-10-18 later: decode 44 t/s short (stripe-major EXL3 mat-vecs, fused output stage); 247k-token prompt:
   prefill 90.6 t/s, decode 13.7 t/s at that depth; 116k: 161 / 20.1 t/s. Long-context fixes: FA query chunks
   (2 s GPU job timeout), q8_0 KV read directly by the FA kernel (no context-sized scratch -> no KV eviction).)
+  (2026-10-18 night: warm decode from saved contexts (scripts/depth_kv.sh): 37k 33.9, 116k 23.9, 247k 18.2 t/s.)
 - JDE elastic-slot NaN bug (garbage after a long prompt that follows an earlier request) fixed 2026-10-17.
 
 - **MVP v1 = JDE in llama-server** (`scripts/serve.sh`, default `JI_ENGINE=jde`): full **262k context, q8_0 KV**

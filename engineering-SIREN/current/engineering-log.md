@@ -569,3 +569,6 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
   `scripts/depth_kv.sh N` restores depth_N.bin (or prefills once and saves; 116k = 1.46 GB, save 0.8 s, restore
   0.3 s). Warm decode at depth (restored, second request): **37k 33.9 t/s, 116k 23.9 t/s** - the earlier
   25 / 20 t/s figures were cold expert caches right after a prefill.
+- Saved contexts on AUX-1 `/mnt/ssd/kvcache`: d37k.bin, depth_100000.bin (116k), depth_245000.bin (247k, 2.9 GB,
+  save 8 s). Warm decode at 247k: **18.2 t/s** (13.7 before the attention/one-shot/mat-vec work). Attention is
+  still ~37 ms of ~55 ms per token there (10 layers x 3.7 ms); q8_0 KV streaming alone would be ~14 ms.
