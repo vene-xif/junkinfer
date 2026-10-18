@@ -643,3 +643,12 @@ So the kernel runs at the speed of its load pattern: half rows (272 of every 544
 (60 KB LDS, one workgroup per CU: 2x slower), head-major emulation of the real kernels (only -3..6 %).
 The remaining gap to the 16-byte contiguous probe (~1.3 ms per layer at 245k, ~8 ms per token) needs full-row
 16-byte loads within ~32 KB LDS per workgroup.
+
+## 2026-10-18 — end-to-end at 247k after the FA2 / attn_d2 / merge work
+
+Server (262k ctx, q8_0 KV, ub 4096), frozen 246,937-token prompt (`JI_PROMPT_FILE=.../depth_245000.txt
+scripts/big_bench.py 245000 64`): **prefill 114.5 t/s (2157 s)** (97.3 t/s / 2538 s with the first ji_fa2,
+90.6 before it), same greedy text, no GPU ring timeouts. 68k-token prompt (llama-completion): 289.6 s (323 s).
+Decode at 247k: ~19.7 t/s warm from the saved context (attention 20.8 ms of ~51 ms GPU per token).
+Also tried for ji_fa2 and slower: p through LDS (1490 vs ~1430-1470 ms 8k FA: the read sits on the PV critical
+path), two query register sets (1620; the compiler's wait placement for scalar loads gets worse).

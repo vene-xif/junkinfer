@@ -60,6 +60,12 @@ At 7 GB/s that is 2-2.5 s per ubatch, so the ubatch must be >= 4096 tokens to st
 - At 262k depth, dense attention adds about 1.8 GB of KV read (kvarn5) and 43 GFLOP per token.
   That alone is about 7 ms per token at peak. An MTP verify window multiplies the compute part.
   50 t/s at full depth needs sparse decode attention (or a very good MTP acceptance).
+- Measured budget at 247k depth (2026-10-18, GPU time per token, profiled): attention 20.8 ms (10 layers x 2.08 ms;
+  a pure-load probe of contiguous full KV rows with 16-byte loads needs 1.31 ms per layer = 13 ms), MoE mat-vecs
+  13.4 ms (the KV fills the VRAM the expert cache had at short depth: more zero-copy misses over PCIe), dense
+  EXL3 mat-vecs ~10 ms, LM head 2.4 ms, rest ~4 ms. With attention at the probe floor: ~43 ms -> ~23 t/s;
+  everything else at short-depth cost too: ~36 ms -> ~28 t/s. 50 t/s at 262k on one card is out of reach with
+  dense attention; MTP windows (shared KV and dense reads) are the remaining non-approximate lever.
 - On one card only about 4 GB of VRAM is left for experts (8 GB - 1.4 GB dense - 1.8 GB KV - buffers).
   That is about a quarter of the experts. The misses go to the CPU and the bus, in parallel:
   CPU (6 Zen+ cores, i-quants are compute-bound at about 2-4 GB/s per core) and PCIe (7-8 GB/s).
