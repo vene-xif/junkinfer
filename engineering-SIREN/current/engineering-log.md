@@ -702,3 +702,29 @@ layers of this hybrid model attend broadly (the GDN layers carry the local conte
 would need 8x the K/V reads (GQA sharing lost). Not a go under "tiny KL"; the q8_0-KV bar is ~0.0015.
 Consequence for KV streaming (user link: adaptive KV streaming fork, host RAM + VRAM pages + ring buffer): only
 worthwhile with selection; dense attention would stream 2.85 GB per token over PCIe. Parked with sparse attention.
+
+## 2026-10-18 (late night) — KVarN-6 validated on quality, not yet a speed win; research review (Gemini report)
+
+**Gains: none shipped this round. Decode / prefill t/s unchanged (247k: 21.2 / 114.5).**
+
+- KVarN quality (engine 356031b68, `JI_KVSIM=bits` simulation: completed 128-cell tiles of the q8_0 cache are
+  KVarN-quantised and written back as q8_0; sink tile exact). KL vs **f16 KV**, L_code 32k, last 1024 tokens via JDE:
+  q8_0 0.00090 (p99 0.0177) | KVarN6 sim 0.00099 (0.0241) | KVarN5 0.00138 | KVarN4 0.00224. The simulation adds two
+  q8 roundings, so real KVarN6 meets the q8_0 bar.
+- KVarN-6 decode attention `attn_kvr` (engine, experimental): correct, but 1193 us per layer at 116k vs ~1000 for
+  attn_hm on q8_0 although it reads 21 % fewer bytes: 128 VGPRs + 22.0 KB LDS (2 workgroups per CU) and the extra
+  unpack / axis work lands in the barrier-serialised block phases that already limit attn_hm. The VRAM it would
+  free is worth ~+5 % at 247k (expert cache test: 500 MiB less cache = 20.3 -> 19.6 t/s, hit rate 79.2 -> 74.3 %).
+  Full port (tiles + f16 tail in llama-kv-cache, FA2 prefill reader, state I/O, truncation) parked until the
+  attention kernel is faster than q8_0's.
+- Research review (user-provided Gemini report "JunkInfer Technical Strategy Report", plus own survey):
+  1. Quest page-sparse decode: measured above - fails the KL gate even with oracle selection.
+  2. AcceptMoE verifier expert pruning for MTP (arXiv 2608.02989): MTP deferred by the user.
+  3. Full-rate u24 instead of v_mul_lo_u32 in the EXL3 trellis decode: already tried 2026-10-17 (removed from the
+     ISA, decode and prefill unchanged - not the limiter).
+  4. Recency-frequency expert cache policy with persistent frequencies / admission filter (arXiv 2609.29032):
+     next (trace simulation first). iqk AVX2 CPU kernels: EXL3 misses run zero-copy on the GPU, CPU idle.
+  5. SpargeAttn-style PV skip in ji_fa2 (skip a block's V when all scores < running max - T): implemented and
+     measured on a 79.6k-token prompt - identical FA time and output at T = 12 / 16: blocks that far below the
+     running max essentially never occur here (broad attention, as in the sparse-decode result). Reverted.
+     XAttention sparse prefill: same broad-attention risk; not tried.
