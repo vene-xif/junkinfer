@@ -572,3 +572,26 @@ JDE's EXL3 VRAM margin was 1000 MiB for the old dequant path's buffers; 400 now:
 - Saved contexts on AUX-1 `/mnt/ssd/kvcache`: d37k.bin, depth_100000.bin (116k), depth_245000.bin (247k, 2.9 GB,
   save 8 s). Warm decode at 247k: **18.2 t/s** (13.7 before the attention/one-shot/mat-vec work). Attention is
   still ~37 ms of ~55 ms per token there (10 layers x 3.7 ms); q8_0 KV streaming alone would be ~14 ms.
+
+## 2026-10-18 — "rows in scalar registers": new prefill FA (ji_fa2) and decode attention (attn_d2)
+
+The 8 query heads that share a KV head are uniform across a wave when the wave covers one position (prefill) or
+the token (decode): their query values go to scalar registers (scalar loads, SGPR operands of the MACs). Both old
+kernels were bound by LDS reads of Q.
+- **ji_fa2** (engine e289598fe, default for q8_0 K/V): wave = one position x 8 heads, workgroup = 4 positions,
+  K/V blocks staged in LDS (q8_0 dequantised while staging), P broadcast by readlane, 84 VGPRs / 3 waves per SIMD.
+  Pitfalls: `s += dot(q, k)` compiled to mul+3 mac+add (explicit fma chains), a fully unrolled chunk hoisted 256
+  query values into SGPRs and spilled (one-step-ahead prefetch in a rolled loop). P via LDS instead of readlane:
+  slower; 8/16 positions per workgroup (fewer K/V re-reads): slower. 8k FA 2144 -> 1837 ms; 68k: 1024-row chunk at
+  49k cells 343 -> 301 ms, prompt eval 346 -> 323 s; **247k-token prompt 90.6 -> 97.3 t/s**.
+  (The perf logger's per-op "FA" sum misled once - judge by per-dispatch times and prompt eval.)
+- **attn_d2** (engine abfe5e983, default for q8_0 KV): lane = key, K rows staged coalesced as raw q8_0 into per-wave
+  LDS (64 keys x 17 words per 64 dims; per-lane row loads were slower), next step prefetched into registers; V rows
+  staged raw (4 keys, prefetched), dequantised per lane; 4 waves per chunk combined in LDS. Single-wave chunks with
+  1024 chunks were faster in isolation but the serial attn_merge over ~900 partials ate it (end-to-end slower);
+  single-wave workgroups with an 8 KB V buffer fit one wave per SIMD (LDS-limited occupancy).
+  JI_ATTN_TEST 116k 1424 -> 1140 us per layer; **decode from restored contexts: 116k 25.4 -> 27.2 t/s,
+  247k 17.9 -> 19.7 t/s**, greedy output identical.
+- The JI_ATTN_TEST microbenchmark is only valid with VRAM headroom (JI_CACHE_MIB=500): its buffers otherwise land in
+  GTT (the "245k" numbers before this were PCIe-bound and noisy).
+- Saved contexts for source-code prompts now freeze the prompt text (depth_N.txt): the engine sources change.
