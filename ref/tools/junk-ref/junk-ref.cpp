@@ -359,8 +359,40 @@ int main(int argc, char ** argv) {
         llama_memory_clear(llama_get_memory(ctx), true);
         double row_kl = 0.0; uint64_t row_n = 0;
 
-        for (int start = 0; start < len; start += n_batch) {
-            const int n = std::min(n_batch, len - start);
+        // JR_STATE_DIR=dir: the prefix [0, a) of a row is prefilled once and kept as a sequence state file
+        // (long rows: a 262k prefill takes ~40 min). JR_TAIL_B=n: from the first scored position on, batches of
+        // n tokens (n <= 4 runs the scored tokens through the decode engine instead of the prefill path)
+        static const char * state_dir = getenv("JR_STATE_DIR");
+        static const int tail_b = getenv("JR_TAIL_B") ? std::max(1, std::atoi(getenv("JR_TAIL_B"))) : 0;
+        int start0 = 0;
+        if (state_dir && row.a > 0 && !rs.on) {
+            const std::string base = tok_path.substr(tok_path.find_last_of('/') + 1);
+            const std::string sp = std::string(state_dir) + "/" + base + "_r" + std::to_string(r) + "_a" + std::to_string(row.a) + ".state";
+            std::vector<llama_token> stoks(row.a);
+            size_t n_loaded = 0;
+            FILE * probe = fopen(sp.c_str(), "rb");
+            if (probe) fclose(probe);
+            if (probe && llama_state_seq_load_file(ctx, sp.c_str(), 0, stoks.data(), stoks.size(), &n_loaded) > 0 && n_loaded == row.a &&
+                    std::equal(stoks.begin(), stoks.end(), row.tok.begin())) {
+                LOG_INF("row %d: prefix state %s restored (%u tokens)\n", r, sp.c_str(), row.a);
+                start0 = (int) row.a;
+            } else {
+                llama_memory_clear(llama_get_memory(ctx), true);
+                for (int start = 0; start < (int) row.a; start += n_batch) {
+                    const int n = std::min(n_batch, (int) row.a - start);
+                    batch.clear();
+                    for (int i = 0; i < n; ++i) batch.add(row.tok[start + i], start + i, 0, false);
+                    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) { LOG_ERR("prefix decode failed at row %d pos %d\n", r, start); return 1; }
+                }
+                if (llama_state_seq_save_file(ctx, sp.c_str(), 0, row.tok.data(), row.a) == 0) LOG_WRN("row %d: saving %s failed\n", r, sp.c_str());
+                else LOG_INF("row %d: prefix state saved to %s\n", r, sp.c_str());
+                start0 = (int) row.a;
+            }
+        }
+
+        for (int start = start0, n = 0; start < len; start += n) {
+            const int nb = (tail_b > 0 && start >= (int) row.a) ? tail_b : n_batch;
+            n = std::min(nb, len - start);
             batch.clear();
             std::vector<int> out_pos;
             for (int i = 0; i < n; ++i) {

@@ -27,3 +27,13 @@ Status: ACTIVE. Started 2026-10-15.
 | EXL3 weights | exllamav3 | CANDIDATE (step 6) | Pareto-best quality per bit. CUDA/ROCm only. Decode needs u32 multiply (quarter rate on gfx803) -> likely ALU-bound at ~half bandwidth. mul1 codebook byte-sum maps to `v_sad_u8`. Conversion needs a GPU: done once on VENE. |
 | vLLM on gfx803 | prior work | REJECTED | Per-dispatch CP/qcm-fence stall at engine dispatch; all software axes exhausted (prior project). |
 | HIP backend on AUX-1 | prior work | RISKY | Same ROCm stack as the vLLM stall. Vulkan is the default path. |
+
+### 2026-10-18 survey: sparse decode attention / KV compression (user: KL vs EXL3 4.0 bpw logits is the gate)
+
+| candidate | source | status | notes |
+|---|---|---|---|
+| Quest page selection (per-page key bounds, top-k pages + sink + recent window) | Quest (2024) | IN PROGRESS (JDE `attn_meta/score/topk`, `JI_SPARSE`) | simplest GPU-friendly selector; metadata ~6 % of q8_0 KV (1 KB per 32-cell page and kv head) |
+| Adaptive top-p budgets over estimated attention mass | Twilight (arXiv 2502.02770) | CANDIDATE | prunes per step by cumulative mass instead of a fixed k; needs a cheap score estimate per page / token |
+| Low-rank pre-RoPE keys + offloaded V, exact sparse reconstruction | ShadowKV (ICML 2025) | NOTED | targets batch throughput / CPU offload; selection accuracy better than Quest in their tables |
+| Clustered retrieval (wave index) / drift-robust retrieval | RetroInfer (VLDB), ParisKV (arXiv 2602.07721) | NOTED | ParisKV reported highest accuracy among sparse methods in its comparison; heavier indexing |
+| KVarN dual-axis variance-normalised KV quantisation | KVarN (arXiv 2606.03458), BeeLlama Vulkan shaders | NEXT (user) | Hadamard + row/column scaling per 128x128 tile; near-lossless far below 6 bits -> kvarn6 frees ~0.8 GB at 262k for the expert cache |
