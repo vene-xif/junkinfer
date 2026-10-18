@@ -652,3 +652,29 @@ scripts/big_bench.py 245000 64`): **prefill 114.5 t/s (2157 s)** (97.3 t/s / 253
 Decode at 247k: ~19.7 t/s warm from the saved context (attention 20.8 ms of ~51 ms GPU per token).
 Also tried for ji_fa2 and slower: p through LDS (1490 vs ~1430-1470 ms 8k FA: the read sits on the PV critical
 path), two query register sets (1620; the compiler's wait placement for scalar loads gets worse).
+
+## 2026-10-18 (evening) — head-major KV cache + attn_hm: 247k decode 19.7 -> 21.2 t/s
+
+**Gains: decode at 247k 19.7 -> 21.2 t/s (+7.6 %, warm, restored context); short-context decode 44.0 t/s
+(unchanged); prefill 7.2k-token prompt 350 -> 354 t/s; 247k prefill not re-measured.**
+
+Load probes with guaranteed 16-byte loads (uvec4 bindings), 116k / 245k cells: per-head half rows of the
+cell-major cache 1117 / 2251 us, lane-per-key rows 2174 / 4617, **per-head contiguous (head-major) 668 / 1504**.
+The interleaving of the two kv heads' 272-byte halves was the cost, whatever the load width or kernel shape.
+- Engine 3ebdc1bad: `llama_kv_cache` stores K/V head-major (`JI_KV_HM`, default on; one stream, V not
+  transposed): views, set_rows (one index row per (token, head)), k-shift view, state save/restore (the file keeps
+  the cell-major format: rows gathered/scattered per head - old snapshots restore), failed-restore clears, graph
+  reuse checks. llm_graph detects a transposed V by nb[1] > nb[2]: the head-major V view is named `*_hm` and
+  excluded. JDE kernels address rows through KVROW(cell, head) (kv_size in a push constant), elastic slots are
+  carved per head region. `attn_hm`: per 64-key block the workgroup streams the head's K rows then V rows (17 KB
+  each) with contiguous 16-byte loads into one LDS row buffer (69-word stride), next block loaded during this one.
+- Bug found by KL, not by text: JDE took each token's cell from the K index input, which now has a row per
+  (token, kv head) - a 4-entry stack array received 8 entries (KL 0.3 and run-to-run nondeterminism in
+  multi-token windows; single tokens were exact). Greedy-text equality is a poor test here: different but
+  equivalent kernels flip the text after ~30 tokens. Use `llama-junk-ref` KL (now with L_code / L_prose on AUX).
+- attn_hm phase test (245k): full 2030 us; without QK math 1596, without PV math 1580, without both 1614 (probe
+  floor 1504). QK and PV each fit under the loads, together they do not: the block's phases are serialised by
+  barriers and only 2 workgroups fit per CU (128 VGPRs, 26 KB LDS). Fewer VALU ops (block-scale folding, p via
+  LDS) and a full block of load lead time changed nothing.
+- Lesson (AUX reboot): two model processes at once (a probe run overlapping a build+test) OOM the box (pinned
+  experts); /tmp is wiped by a reboot - helper scripts and prompts now live in ~/jt on AUX.
