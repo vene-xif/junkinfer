@@ -728,3 +728,10 @@ worthwhile with selection; dense attention would stream 2.85 GB per token over P
      measured on a 79.6k-token prompt - identical FA time and output at T = 12 / 16: blocks that far below the
      running max essentially never occur here (broad attention, as in the sparse-decode result). Reverted.
      XAttention sparse prefill: same broad-attention risk; not tried.
+- Expert cache policy sweep at 247k (saved context, 3 runs each): decay 0.98 (default) 79.20 % hit, 20.1-20.3 t/s;
+  0.995 79.56 %, 20.2-20.4; 0.95 78.64 %; 24 swaps per token 78.47 %. Within noise: the persistent decayed-frequency
+  score + admission hysteresis already is the "recency-frequency hybrid"; the hit rate is capacity-bound.
+- attn_hm at 3 workgroups per CU (score exchange through LDS float atomics - VK_EXT_shader_atomic_float, 2 KB
+  instead of 8 KB - combine buffers aliased into the row buffer, LDS 19.7 KB): 1115 -> ~1510 us at 116k. LDS float
+  atomics are far too slow on gfx803. Reverted. Note: the same attn_hm build measured 992 and 1115 us in two
+  sessions - ~10 % run-to-run variance in this microbenchmark; small kernel deltas need repeated runs.
