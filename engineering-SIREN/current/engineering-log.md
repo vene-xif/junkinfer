@@ -735,3 +735,19 @@ worthwhile with selection; dense attention would stream 2.85 GB per token over P
   instead of 8 KB - combine buffers aliased into the row buffer, LDS 19.7 KB): 1115 -> ~1510 us at 116k. LDS float
   atomics are far too slow on gfx803. Reverted. Note: the same attn_hm build measured 992 and 1115 us in two
   sessions - ~10 % run-to-run variance in this microbenchmark; small kernel deltas need repeated runs.
+
+## 2026-10-19 — host overhead per decode token (easy wins, in agreed easiest-first order)
+
+**Gains: decode (server, short context) 43.9 -> 45.75 t/s (+4.2 %); prefill unchanged.**
+Real per-token time (JI_PROFILE, no GPU profiler): 21.7 ms = 20.2 GPU + 0.7 "record" + 0.8 "post" (GPU idle).
+- Engine 239ae079b: the expert-cache update sorted all ~3,500 resident slots every token to find <= 8 eviction
+  candidates; partial sort -> post 0.78 -> 0.23 ms; **43.9 -> 45.3 t/s**.
+- Engine 1cb533054: one-shot tokens submit one replayable command buffer instead of 81 (2 per layer + final;
+  JI_ONECB=0 restores) -> record 0.67 -> 0.25 ms; **44.9 -> 45.75 t/s** (two runs each).
+- Skipped after re-estimating: FA2 exp2 / lazy rescale (softmax is ~2 % of the block's instructions: < 1 %,
+  below noise); LM head already streams at ~156 GB/s (<= 0.5 ms left).
+- Server gap: JDE 20.8 ms vs 21.9-22.0 ms per token served. Sampler chain variants (top_k 1, minimal chain) move it
+  by only +-0.6 ms (top_k=1: 21.9 ms); the rest is the serial logits copy / candidate building / server loop.
+  Profiling note: the GPU profiler (JI_PROFILE_GPU) serialises dispatches, so concurrent small kernels look
+  expensive; judge them by ablation. llama-completion at 262k ctx gets a 0 MiB expert-cache budget (the server
+  gets ~900 MiB + elastic slots): use the server for decode measurements.
