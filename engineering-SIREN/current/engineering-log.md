@@ -595,3 +595,51 @@ kernels were bound by LDS reads of Q.
 - The JI_ATTN_TEST microbenchmark is only valid with VRAM headroom (JI_CACHE_MIB=500): its buffers otherwise land in
   GTT (the "245k" numbers before this were PCIe-bound and noisy).
 - Saved contexts for source-code prompts now freeze the prompt text (depth_N.txt): the engine sources change.
+
+## 2026-10-18 — ji_fa2: scalar Q loads were half the QK time; attn_merge was latency bound
+
+Method: RADV_DEBUG=shaders (ISA) + ACO_DEBUG=liveinfo (register demand per block) + kernel variants with a phase
+removed (8k-prompt FA time).
+- ji_fa2 QK ~880 of 1840 ms; with every Q load at one address (scalar cache always hits) QK dropped by 470 ms. Q is
+  8 KB per position, re-read per 64-key block, the scalar cache is 16 KB per CU group; and scalar loads share
+  lgkmcnt with the LDS reads, so the one-step prefetch cannot hide them.
+  Fix (engine ce17233a6): 2 keys per lane (128-key blocks, K staged in 16-dim chunks, same 16 KB LDS) = half the Q
+  loads per MAC. That alone went to 128 VGPRs (2 waves per SIMD): the row max / sum (wave-uniform, computed by
+  VALU) lived in 16 VGPRs; NIR drops readFirstInvocation of known-uniform values, so they are made "divergent" with
+  `fma(float(lane), runtime_zero, x)` and then read-first -> SGPRs. 84 VGPRs, 3 waves: **8k FA 1840 -> ~1430 ms**.
+  Now ~62 % of the fp32 MAC peak (the 8k test's MACs take 0.89 s at peak); QK ~700, PV ~535 ms.
+  Positions per workgroup 8/16 still slower than 4.
+- attn_merge (engine 618576564): 16 workgroups each walked 256 chunk partials with dependent loads (~196 us per layer
+  at 247k = 2 ms per token). Thread = chunk for the weights (workgroup max / sum), then 8-way unrolled independent
+  loads: **29 us per layer**.
+- 247k decode, GPU time per token (JI_PROFILE_GPU, profiled = with per-dispatch sync): 53.6 -> 51.9 ms;
+  attn_d2 21.6 ms of it (2.16 ms per layer), MoE/dense weights ~26 ms (as at short context).
+- AUX had drifted (jde.cpp with attn_d2 opt-in): sync check `rsync -rcn` before trusting a measurement.
+
+## 2026-10-18 — decode attention at depth: it is the access pattern (probes), not ALU / occupancy / prefetch
+
+JI_ATTN_TEST (q8_0, us per layer at 116k / 245k cells; attn_d2 then 1134 / 2252). Variants that changed nothing:
+row max/sum in SGPRs, a cheaper K address map, combine buffers aliased into the K area (LDS 26 -> 21.7 KB),
+V chunks of 2 or 8 keys, V prefetch 2 chunks ahead, unsigned-byte K/V conversion + block-scale folding (-25 % QK
+VALU), p through LDS, consecutive workgroups on the same head, Q loads at one address. Removing QK math but
+keeping the K loads: 1083 (so the math is ~5 %). (Note: in the RADV dump attn_d2 is the 128-VGPR shader; the
+64-VGPR one is attn_gqa - misread for a while.)
+Pure-load probes over the same buffers and grid (no math):
+
+| probe | 116k | 245k |
+|---|---|---|
+| attn_d2's K + V pattern | 1032 | 2206 |
+| K pattern only / V pattern only | 811 / 495 | 1661 / 1121 |
+| both heads' halves read by sibling waves | 1000 | 2010 |
+| attn_d3 pattern (4 waves = 4 dim pieces of the same keys) | 956 | 2027 |
+| head-major addressing of the attn_d2 pattern | 973 | 1920 |
+| contiguous full cell rows, 4-byte loads | 845 | 1570 |
+| contiguous full cell rows, 16-byte loads | **652** | **1310** (~195-205 GB/s) |
+
+So the kernel runs at the speed of its load pattern: half rows (272 of every 544 bytes per head), 68-byte pieces,
+4-byte loads. Engine 37f3d7a2d: the 4 waves of a workgroup now share a 64-key block (QK split by dims - the four
+68-byte pieces of each row are fetched together; PV split by keys): ~1100 / 2134, 247k decode attention
+21.6 -> 20.8 ms/token. Tried and slower: 16-byte staging loads (1178), both kv heads in one 8-wave workgroup
+(60 KB LDS, one workgroup per CU: 2x slower), head-major emulation of the real kernels (only -3..6 %).
+The remaining gap to the 16-byte contiguous probe (~1.3 ms per layer at 245k, ~8 ms per token) needs full-row
+16-byte loads within ~32 KB LDS per workgroup.
