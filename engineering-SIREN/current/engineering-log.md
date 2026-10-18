@@ -678,3 +678,27 @@ The interleaving of the two kv heads' 272-byte halves was the cost, whatever the
   LDS) and a full block of load lead time changed nothing.
 - Lesson (AUX reboot): two model processes at once (a probe run overlapping a build+test) OOM the box (pinned
   experts); /tmp is wiped by a reboot - helper scripts and prompts now live in ~/jt on AUX.
+
+## 2026-10-18 (night) — sparse decode attention: fails the KL gate on this model (kept off)
+
+**Gains: none shipped (JI_SPARSE off by default). Decode / prefill t/s unchanged.**
+
+Engine 1e6f800d1: Quest-style page selection in JDE (32-cell pages, per-dim center/radius of rotated K,
+bound q.c + |q|.r per query head, shared selection per kv head, radix top-k + sink + recent pages, attn_hm over
+the selected pages). Quality harness: `llama-junk-ref` with `JR_STATE_DIR` (prefix states cached on the SSD,
+`/mnt/ssd/kvcache/jref`) and `JR_TAIL_B=4` (scored tail through JDE); references = our own EXL3 4.0 bpw, q8_0 KV,
+full attention (user's gate). Dense vs reference KL 0 (all-pages sparse 0.00015 = chunking noise).
+
+| row | selection | budget | KL mean | p99 | top-1 |
+|---|---|---|---|---|---|
+| L_code 32k | Quest bound | 4096 / 8192 / 16384 | 0.0092 / 0.0061 / 0.0045 | 0.097 / 0.063 / 0.037 | 98.6 / 98.7 / 99.2 % |
+| L_code 32k | exact-max oracle | 8192 | 0.0065 | 0.059 | 98.6 % |
+| L_code 32k | attention-mass oracle (per-head relative) | 4096 / 8192 | 0.0059 / 0.0034 | | 99.2 % |
+| L_code 128k | Quest bound | 16384 | 0.025 | 0.27 | 96.1 % |
+| L_code 128k | attention-mass oracle | 16384 | 0.0143 | 0.16 | 96.7 % |
+
+Even the ideal page choice loses ~1.4 % KL-worth of mass at 12.5 % of a 128k context: the 10 global-attention
+layers of this hybrid model attend broadly (the GDN layers carry the local context). Per-query-head selection
+would need 8x the K/V reads (GQA sharing lost). Not a go under "tiny KL"; the q8_0-KV bar is ~0.0015.
+Consequence for KV streaming (user link: adaptive KV streaming fork, host RAM + VRAM pages + ring buffer): only
+worthwhile with selection; dense attention would stream 2.85 GB per token over PCIe. Parked with sparse attention.
