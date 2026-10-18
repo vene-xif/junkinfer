@@ -17,7 +17,7 @@ for p in sorted(glob.glob("engine/docs/**/*.md", recursive=True)):
         break
 text = text[: n_tok * 4]
 body = {"messages": [{"role": "user", "content": text + "\n\nSummarise the documents above in a few paragraphs."}],
-        "max_tokens": n_gen, "temperature": 0.7, "chat_template_kwargs": {"enable_thinking": False}}
+        "max_tokens": n_gen, "temperature": float(__import__("os").environ.get("JI_TEMP", "0.7")), "chat_template_kwargs": {"enable_thinking": False}}
 if len(sys.argv) > 5 and sys.argv[5] == "nocache":
     body["cache_prompt"] = False
 req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})

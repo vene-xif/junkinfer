@@ -5,6 +5,8 @@
 # usage: scripts/depth_kv.sh N [runs=2]     e.g. JI_SLOT_DIR=/mnt/ssd/kvcache scripts/serve.sh ... ; scripts/depth_kv.sh 100000
 set -euo pipefail
 N=${1:?tokens}; RUNS=${2:-2}; NAME="depth_${N}.bin"; URL=http://127.0.0.1:8080
+# the source-code prompt (N > 110000) is frozen next to the saved context
+export JI_PROMPT_FILE="${JI_SLOT_DIR:-/mnt/ssd/kvcache}/depth_${N}.txt"
 cd "$(dirname "$0")/.."
 r=$(curl -s -X POST "$URL/slots/0?action=restore" -H "Content-Type: application/json" -d "{\"filename\":\"$NAME\"}")
 if echo "$r" | grep -q n_restored; then echo "restored $NAME: $r"; else

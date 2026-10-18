@@ -13,6 +13,12 @@ for pat in ["engine/docs/**/*.md", "engine/src/**/*.cpp", "engine/ggml/src/ggml-
         if len(text) > n_tok * 3.3: break
     if len(text) > n_tok * 3.3: break
 text = text[: int(n_tok * 3.3)]
+# frozen prompt: a saved KV context only matches the exact text it was built from (the engine sources change)
+import os
+frozen = os.environ.get("JI_PROMPT_FILE")
+if frozen:
+    if os.path.exists(frozen): text = open(frozen).read()
+    else: open(frozen, "w").write(text)
 body = {"messages": [{"role": "user", "content": text + "\n\nIn two sentences, what is this code base?"}],
         "max_tokens": n_gen, "temperature": 0.0, "cache_prompt": cache, "chat_template_kwargs": {"enable_thinking": False}}
 req = urllib.request.Request("http://127.0.0.1:8080/v1/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
