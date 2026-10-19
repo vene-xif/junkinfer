@@ -967,3 +967,34 @@ sub-page merged into the online softmax; dense fallback if the mask is not a cau
 Errors add: prefill and decode approximations together exceed the ~0.0015 bar (q8_0-KV level) at 128k. Budget and
 the variance term barely matter; the tail estimate matters most (3x lower KL than dropping). Opt-in for now
 (serve.sh documents it); default decision left to the user.
+
+## 2026-10-19 MTP: research, verify-cost scaling, MTP-head quantization sweep
+
+**Gains: none (analysis). Decode / prefill unchanged.**
+
+Research (user ideas): reduced draft vocabulary (HyperQwen: 40k ids from the model's own outputs, 97.5 % coverage,
+draft ~3 ms -> 0.5-1 ms; vLLM #58578: +9-14 % on Qwen3.6-35B in llama.cpp); probabilistic drafting + rejection
+sampling (llama.cpp #27694, merged 2026-10-02: +2-9 % only at temperature >= 0.5); --spec-draft-p-min confidence
+gating. Verify-cost scaling here (n-gram drafts through JDE, per-kernel GPU profile, single vs 2-token step):
+23.3 vs 47.9 ms. Dense mat-vecs / LM head 1.1-1.3x, GDN / attention / router 1.0-1.9x, routed-expert mat-vecs
+2.9-3.0x (one row per token and slot, misses over PCIe per row). A 1-token draft can therefore never win on one
+card; ideal sharing would give ~37 ms (+12-24 % with good acceptance). MTP engine work deferred to the second card;
+the lossy option worth gating later is verification restricted to cached experts (AcceptMoE, arXiv 2608.02989).
+
+MTP sidecars from the BF16 GGUF (tools/mtp_extract.py: metadata + output head + token embedding + blk.40; output
+head Q6_K and embedding Q8_0 fixed, block type varied), server draft-mtp, draft n 3, 6 prompts x 300 tokens
+(code rewrite, story, technical, bash, Polish poem, arithmetic), thinking off:
+
+| MTP block | size | accept t=0 | accept t=0.7 | per position (t=0) |
+|---|---|---|---|---|
+| Q4_0 | 1.45 GB | 0.615 | 0.556 | 0.76 / 0.56 / 0.43 |
+| IQ4_NL | 1.45 GB | 0.644 | 0.550 | 0.78 / 0.57 / 0.44 |
+| Q5_K | 1.59 GB | 0.642 | 0.566 | 0.79 / 0.57 / 0.44 |
+| Q6_K | 1.66 GB | 0.621 | 0.566 | 0.78 / 0.56 / 0.43 |
+| Q8_0 | 1.87 GB | 0.637 | 0.569 | 0.78 / 0.57 / 0.45 |
+| BF16 | 3.74 GB | 0.637 | 0.571 | 0.79 / 0.57 / 0.44 |
+
+Acceptance is flat from 4 bits up: BF16 is the ceiling and IQ4_NL reaches it (matches the user's earlier finding),
+so better formats (GPTQ / EXL3) can only pay by keeping it at fewer bits -> testing Q3_K / IQ3_S / Q2_K.
+Draft-vocabulary coverage from the local corpora saturates at 0.81-0.89 (only ~20k distinct tokens in 1 M tokens):
+a real list needs millions of tokens of model output (planned with the second card).
