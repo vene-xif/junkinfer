@@ -840,3 +840,25 @@ KL is flat in the budget at 262k (floor ~0.0011 from the estimated tail), below 
 JI_SPARSE=16384, JI_SP_BG=1, JI_SP_MIN=98304 (128k and 262k measured; 64k-96k stays dense until gated). Metadata
 241 MiB only when n_ctx >= JI_SP_MIN (expert cache 500 -> 255 MiB). 100k with sparse forced on: 28.9 -> 34.0 t/s.
 Full-attention references must set JI_SPARSE=0 (mkrefs.sh does).
+
+## 2026-10-19 Decode EXL3 mat-vecs: probes, f16 codebook sum
+
+**Gains: decode short 43.5 -> 45.0 t/s (+3%), 245k 29.6 -> 31.1 t/s (+5%); prefill 7.2k 392.8 -> 393.3 (unchanged).**
+
+Probe-first (x3_mv compiled with -DX3_EXP, JI_BENCH, pipelined us):
+
+| variant | 8192x2048 | 2048x4096 | LM head 248k x 2048 (6 bit) |
+|---|---|---|---|
+| production | 84.2 | 49.1 | 2425 |
+| trivial codebook | 51.2 | 31.7 | 1781 |
+| no LDS input reads | 80.8 | 46.5 | 2339 |
+| no multiply | 68.4 | 40.3 | 1942 |
+| no f16 -> f32 conversions | 64.5 | 38.2 | 1886 |
+| f16 sum, one conversion | 75.4 | 44.0 | 2174 |
+| f16 4-weight dot per tile | 75.8 | 44.5 | 2157 |
+
+The codebook (mcg: 32-bit multiply at quarter rate + two conversions) bounds the decode mat-vecs, not memory or LDS.
+Engine: the halves are summed in f16 (exllamav3 does the same, __hadd -> half W_hat) in every decode / prefill /
+dequant / CPU path. RADV reports shaderFloat16 = false on gfx8 (it is tied to packed 16-bit math); ACO emits the
+scalar f16 add. PPL 4.7578 -> 4.7315; KL vs the old kernels' reference 0.00071 (32k). Remaining codebook cost is the
+multiply (~16 us of 78 on 8192x2048); the rest of the gap to the trivial decode is the conversion and extraction.
