@@ -902,3 +902,21 @@ with JI_SPARSE=0.
 The 64k row fails even at 25 % of the context: quality depends on content, not only on the selected fraction. The
 default threshold (JI_SP_MIN = 98304) stays: every measured row >= 96k passes at the default budget.
 Router (decode): rows per wave 1/2/4/8 = 30/34/34/35 us - latency bound (top-k tail); unchanged.
+
+## 2026-10-19 Easy-win sweep: n-gram speculation, router, MoE tile fill
+
+**Gains: none measurable by default (router -0.13 ms/token). Decode 45 short / 31.1 at 245k, prefill 447.6 at 7.2k.**
+
+- **N-gram self-speculation** (server --spec-type ngram-map-k, n 4, m 3; off by default). The server saved a full
+  63 MiB recurrent-state checkpoint per verify step on this hybrid model: copy-heavy code rewrite 33.3 -> 28.6 t/s
+  despite 88 % acceptance. Engine 072acf561 gives n-gram drafts per-token recurrent snapshots (n_rs_seq <= 3, the
+  JDE verify window): 33.3 -> 37.3 t/s on the rewrite, story unchanged. Limits: a 4-token verify step costs 65-90 ms
+  vs 22 ms per token (four tokens route to ~3x the distinct experts; misses over PCIe), and with a cached prompt the
+  n-gram map drafts far less (116 vs ~400 drafted tokens on a repeated request). Not worth enabling by default.
+- **Router** (engine 6982622ed): four waves per workgroup, 30.0 -> 26.8 us per layer. Probe: the top-k tail is not
+  the cost (30 us without it); the logits phase is latency bound; more rows per wave is slower.
+- **MoE GEMM tile fill** (ub 4096, 7.2k prompt): 32768 rows in 629 64-column tiles = 81 % fill; the kernel already
+  skips empty 8-column groups, so the waste is ~5 % of the MoE GEMMs (~1.5 % of prefill). Not pursued.
+- KL harness note: since a440dface the dense L_code 32k KL vs its reference is 0.00022 (0 with JI_RESERVE_OUTPUTS=0):
+  in junk-ref's 262k context the smaller compute buffer holds fewer JDE elastic slots, so more expert misses run on
+  the CPU (different f32 summation order). KL runs are 6.6x faster (37 vs 247 s: no eviction churn).
