@@ -998,3 +998,15 @@ Acceptance is flat from 4 bits up: BF16 is the ceiling and IQ4_NL reaches it (ma
 so better formats (GPTQ / EXL3) can only pay by keeping it at fewer bits -> testing Q3_K / IQ3_S / Q2_K.
 Draft-vocabulary coverage from the local corpora saturates at 0.81-0.89 (only ~20k distinct tokens in 1 M tokens):
 a real list needs millions of tokens of model output (planned with the second card).
+
+## 2026-10-19 Sparse prefill on by default (user decision)
+
+**Gains: prefill 79.6k 264.1 -> 358.5 t/s (+36 %), 262k ~2.4x; prefill < 32k and decode unchanged.**
+
+User: the combined benefit of sparse decode + prefill is enormous next to the cost - keep both on by default, noted
+as not free but worth it. Engine 2767f7ada: JI_SPARSE_PF defaults to 8192 (local window 4096, 32-key statistics
+sub-pages, from 32k keys). Error budget clarification: all KL figures are vs our own full-attention reference
+(EXL3 4.0 bpw, q8_0 KV), so the sparse terms add on top of the weight and KV quantization error (roughly additive at
+these magnitudes: 128k prefill ~0.0012 + decode ~0.0011 -> 0.0018 measured together). The q8_0-KV error (~0.0015) was
+only a yardstick for "tiny"; the real denominator, EXL3 4.0 bpw vs BF16 KL, is still owed (needs a reference GPU).
+Reference scripts set JI_SPARSE=0 JI_SPARSE_PF=0.
