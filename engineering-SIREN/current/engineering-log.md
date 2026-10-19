@@ -1010,3 +1010,24 @@ sub-pages, from 32k keys). Error budget clarification: all KL figures are vs our
 these magnitudes: 128k prefill ~0.0012 + decode ~0.0011 -> 0.0018 measured together). The q8_0-KV error (~0.0015) was
 only a yardstick for "tiny"; the real denominator, EXL3 4.0 bpw vs BF16 KL, is still owed (needs a reference GPU).
 Reference scripts set JI_SPARSE=0 JI_SPARSE_PF=0.
+
+## 2026-10-19 Gemini report 1 (expert memory hierarchy) + miss substitution + MTP low-bit
+
+**Gains: none (rejected experiment). Decode / prefill unchanged.**
+
+Report https://share.gemini.google/foAnchIoTUbE (prompt "MoE expert memory hierarchy"): many numbers are estimates;
+it assumes an SDMA transfer queue (RADV has none on gfx8) and an x8/x8 dual-card topology (B450: PCIe 2.0 x4
+second slot). Most promising item tested: miss substitution ("0.15 rule", Son 2026, Qwen3-Next-80B: +0.35 % PPL).
+Engine: JI_SUBST_TAU in router_fused (non-resident, rank > 1, normalised weight < tau -> best resident expert, weights
+renormalised; cache statistics follow the router's own choice). KL (L_code 32k, decode):
+
+| tau | 0.02 | 0.04 | 0.06 | 0.10 | 0.15 | 0.20 |
+|---|---|---|---|---|---|---|
+| KL mean | 0.0020 | 0.0033 | 0.0078 | 0.019 | 0.033 | 0.054 |
+| harness tail tok/s (off: 864) | 876 | 880 | 919 | 1052 | 1272 | 1280 |
+
+Perplexity hides per-token divergence that KL sees: no setting is inside the budget. Rejected (code kept, off).
+Other report items judged low value here: async SDMA copies (no transfer queue), 2-bit EXL3 tier (needs CUDA
+quantization), eviction guards / LRFU (+1-4 % hit rate in the literature; may revisit).
+MTP low-bit (uncalibrated): Q3_K 0.613, IQ3_S 0.563, Q2_K 0.550 at t=0 (IQ4_NL 0.644) - the knee is below 4 bit,
+where calibrated quantization of the MTP block (imatrix / GPTQ) could recover acceptance.
