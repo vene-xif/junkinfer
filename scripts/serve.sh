@@ -11,8 +11,9 @@
 #   JI_CTX=262144          context length    JI_CACHE_RAM=8192  host-RAM prompt cache (MiB) for switching conversations
 #   JI_SLOT_DIR=dir        enable slot save/restore to disk
 #   Sparse attention (default on, a deliberate trade: not free, worth it): prefill from 32k context (JI_SPARSE_PF=8192,
-#   +36 % at 80k, ~2.4x at 262k) and decode from 96k (JI_SPARSE=16384, +44 % at 245k); KL vs full attention ~0.0018
-#   for both together at 128k (on top of the weight / KV quantization error). JI_SPARSE_PF=0 / JI_SPARSE=0 turn them off.
+#   the prompt's last 4096 positions exact; +30 % at 80k, ~2.4x at 262k) and decode from 32k (JI_SPARSE=16384, +8 % at
+#   72k, +44 % at 245k); KL vs full attention ~0.00045 for both together at 130k (on top of the weight / KV
+#   quantization error). JI_SPARSE_PF=0 / JI_SPARSE=0 turn them off.
 # Endpoints: OpenAI /v1/chat/completions, /v1/completions, /v1/responses, /v1/models; Anthropic /v1/messages.
 set -euo pipefail
 ENGINE=${JUNKINFER_ENGINE:-$HOME/junkinfer/engine/build/bin}

@@ -96,7 +96,7 @@ at short depth. Smoke numbers, one run each.
 | 4 | MTP speculative decoding with rejection sampling | IMPLEMENTED (JDE verifies 1-4 tokens, server `--spec-type draft-mtp`), correct; not faster yet (MoE scaling, see log) - off by default |
 | 5 | KVarN KV cache on gfx803 (Vulkan) | |
 | 6 | Weight format by KLD gate: IQ4_XS / ik KT / EXL3 transcode | |
-| 7 | Sparse attention for decode (Quest-style) and prefill (XAttention-style), KLD-gated | |
+| 7 | Sparse attention for decode (Quest-style) and prefill (XAttention-style), KLD-gated | DEFAULT ON: decode from 32k (raw-basis page statistics + variance), prefill from 32k (exact last 4096 positions); KL ~0.00045 together at 130k |
 | 8 | Second RX 580: layer split with resident experts | waiting for hardware |
 | 9 | CPU kernels for missed experts (ik_llama iqk / Strata AVX2) | |
 

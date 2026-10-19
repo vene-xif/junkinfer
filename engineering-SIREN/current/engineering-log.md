@@ -1052,3 +1052,86 @@ exact page mass + mean V (8) 0.00019 (= harness floor); estimated mass + exact p
 estimate is the error; the mean value is good enough. Default JI_SP_BG=1 is 0.00128 at this row -> the variance term
 alone cuts ~30 %. Next for sparse quality: better page-mass estimates (variance term, low-rank page covariance,
 low-bit key sketches - VRAM permitting).
+
+## 2026-10-19 MTP end-to-end speed per quant; variance-term speed; Gemini report 3 (sparse KL)
+
+**Gains: none yet (measurements + two opt-in experiments, see below).**
+
+MTP sidecars ranked by real decode speed (server, 32k ctx, ~1.6k tokens, draft n 3, `mtpsweep.sh`):
+
+| draft | acc t=0 | decode t=0 | decode t=0.7 |
+|---|---|---|---|
+| none | - | 31.1 | 32.2 |
+| IQ4_NL | 0.644 | 9.5 | 9.0 |
+| IQ4_NL + q8 embd/head | 0.635 | 9.5 | 9.1 |
+| Q8_0 | 0.637 | 9.5 | 9.2 |
+| Q4_0 | 0.615 | 9.3 | 9.1 |
+| Q3_K | 0.613 | 9.3 | 9.0 |
+| Q2_K | 0.550 | 8.8 | 8.6 |
+
+MTP is ~3x slower than no speculation on one card: the draft runs through the generic ggml graph (not JDE) and the
+multi-token verify reads ~2-3x the experts. The quant barely changes speed (fixed overhead dominates), so acceptance
+decides: IQ4_NL. Parked until card #2 (cheap draft step + grouped verify first).
+
+Variance term (JI_SP_BG=2) at 245k: decode 30.75 -> 30.0 t/s (-2.4 %), +80 MB metadata, decode KL -30 %.
+
+Report https://share.gemini.google/eEIqnjtoBouw (improving sparse decode / prefill KL). Its 35 % mass / 65 % value
+error split is contradicted by our attn_bgx diagnostic (the mass estimate is ~all of it). Taken, easiest first:
+P2 exact dense prefill for the prompt's last positions, P1 gate-weighted self-normalised GQA ranking; then P4 dipole
+sub-centroids / low-rank page variance (attack the mass), P3 32-key sub-page prefill selection, P5 per-head budgets;
+Hadamard blocks / 1-bit sketches last (format + VRAM).
+
+## 2026-10-19 Exact dense prompt tail for the sparse prefill (default 4096) - engine 7a6b79f2f
+
+**Gains: prefill KL at 130k 0.00123 -> 0.00035 (-72 %); prefill 132k 324.3 -> 305.5 t/s (-5.8 %); decode unchanged.**
+
+The prompt's last JI_SPF_DENSE_TAIL positions run the prefill attention densely (report 3, P2). The server sends the
+last 4 prompt tokens as a separate batch (checkpoints), so the prompt end is passed explicitly
+(`llama_ji_set_prompt_end`, server + junk-ref); without it the batch returning outputs is taken as the end.
+
+| dense tail | 0 | 1024 | 2048 | 4096 | 8192 |
+|---|---|---|---|---|---|
+| prefill KL (L_code r1, 130k, dense decode) | 0.00123 | 0.00111 | 0.00102 | 0.00035 | 0.00033 |
+| server prefill 132k t/s | 324.3 | - | - | 305.5 | 288.7 |
+
+Decode-side experiments from report 3 (opt-in; decode KL with dense prefill prefix states):
+
+| config | 99k (L_code98) | 130k (L_code r1) | 245k (L_code r2) |
+|---|---|---|---|
+| default (BG 1) | 0.00101 | 0.00128 | 0.00116 |
+| JI_SP_NORM=2 (gate-weighted share) | | 0.00121 | |
+| JI_SP_BG=2 (variance) | | 0.00089 | |
+| NORM=2 + BG=2 | 0.00107 | 0.00075 | 0.00105 |
+| NORM=2 + BG=2, VARK 0.35 / 0.7 | | 0.00113 / 0.00078 | |
+
+245k decode: default 30.8, BG=2 30.0, NORM=2 + BG=2 28.6 t/s (topk reductions since rewritten with wave ops).
+The 130k gain does not carry over to the other rows: no default change yet.
+
+## 2026-10-19 Sparse decode: page statistics in the raw key basis (default) - decode KL -71 %
+
+**Gains: decode KL vs full attention 0.00115 -> 0.00033 (mean of the 99k / 130k / 245k rows); 245k decode 30.0 ->
+29.55 t/s (-1.5 %); 64k row now passes with sparse decode (0.00034, was 0.0023).**
+
+Diagnosis (offline, `JI_KV_DUMP` + `JI_KV_DUMP_ALLQ`: K of all 10 attention layers and 64 decode queries per layer
+at 130k, numpy in scratchpad `ana/`):
+- Exact page mass for the unselected pages (attn_bgx mode 8) brings decode KL to 0.00019-0.00038 on all three rows:
+  the page-mass estimate is 70-80 % of the error. Doubling the budget (32768) does not help (0.00113 vs 0.00115);
+  a global log-mass offset of +-0.2 triples KL: not a bias, a per-page error.
+- The K cache holds H_256 k (llama.cpp's rotation for quantised KV, n_rot_k = 256). It mixes the 64 RoPE dims (NEOX
+  pairs i / i + 32, base 1e7) into all 256 dims, so per-dimension page variance / radius cannot follow RoPE. After
+  un-rotating, the pair angles match the RoPE frequencies exactly.
+- Layers 7 and 11 carry the error (tail = 44 % / 15 % of the attention mass at 130k). Gaussian page-mass error, as a
+  fraction of the total mass: stored basis 1.74 % / 1.54 %; raw basis 0.01 % / 0.09 % (layers 15-39: 10-50x lower
+  too). Keeping RoPE dims un-mixed is what matters (raw = rope-raw + H64 NoPE >> H64x4).
+
+Implementation: attn_meta un-rotates each page's 32 keys in LDS (FWHT) before mean / variance / radius; attn_qk_q8
+writes the pre-H_256 query (qr) for attn_score. JI_SP_RAW=1 and JI_SP_BG=2 (variance) are the defaults.
+
+| decode KL | 64k | 99k | 130k | 245k |
+|---|---|---|---|---|
+| before (BG 1, stored basis) | 0.0023 (sparse from 32k) | 0.00101 | 0.00128 | 0.00116 |
+| raw basis + variance | 0.00034 (sparse from 32k) | 0.00036 | 0.00033 | 0.00029 |
+| exact page mass (diagnostic floor) | | 0.00038 | 0.00019 | 0.00028 |
+
+Rejected on the way: JI_SP_ROT (log I0 for RoPE pairs - computed on the wrong dims before the rotation was found),
+JI_SP_NORM=2 (gate-weighted ranking: -3 % KL for -4 % speed), JI_SP_BG=3 (dipole: -7 %), budget 24576 / 32768.

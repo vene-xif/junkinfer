@@ -12,8 +12,9 @@ caching, full 262k context). Measured on the dev box (EXL3 4.0 bpw, q8_0 KV), Oc
 | prefill | ~450 t/s (7k prompt) | ~360 t/s (80k prompt) | ~230 t/s (262k, measured on the KL harness) |
 
 Attention is sparse at long context, on by default as a deliberate trade (not free, but worth it): prefill from 32k
-context, decode from 96k, both with a tail estimate of the unselected keys. Together they add KL ~0.0018 vs full
-attention at 128k, on top of the weight / KV quantization error. `JI_SPARSE_PF=0` / `JI_SPARSE=0` turn them off.
+context (the prompt's last 4096 positions exact), decode from 32k, both with a tail estimate of the unselected keys.
+Together they add KL ~0.00045 vs full attention at 130k, on top of the weight / KV quantization error.
+`JI_SPARSE_PF=0` / `JI_SPARSE=0` turn them off.
 
 ## Targets (dev box: Ryzen 5 2600, 32 GB DDR4-3000, RX 580 8 GB, PCIe 3.0 x16)
 

@@ -40,7 +40,8 @@ Numbers: pending (reference run in progress).
 
 The KL figures for sparse attention are measured against our own full-attention engine (EXL3 4.0 bpw weights,
 q8_0 KV), so they ADD to the weight and KV quantization error (roughly additively at these magnitudes). Total vs
-BF16 ~ KL(weights) + KL(q8_0 KV, ~0.0015 vs f16 KV) + KL(sparse decode, ~0.0011) + KL(sparse prefill, ~0.0012).
+BF16 ~ KL(weights) + KL(q8_0 KV, ~0.0015 vs f16 KV) + KL(sparse decode + prefill, ~0.00045 together at 130k; was ~0.0018
+before the raw-basis page statistics and the exact prompt tail, 2026-10-19).
 The q8_0-KV figure was used only as a yardstick for "tiny". Sparse decode and prefill are on by default by user
-decision (not free, worth the cost: +44 % decode at 245k, +36 % prefill at 80k, ~2.4x at 262k). Still owed: KL of
+decision (not free, worth the cost: +44 % decode at 245k, +8 % at 72k, +30 % prefill at 80k, ~2.4x at 262k). Still owed: KL of
 EXL3 4.0 bpw vs BF16 (needs a reference GPU), the denominator for judging these terms.
