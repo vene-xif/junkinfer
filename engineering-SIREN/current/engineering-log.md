@@ -940,3 +940,30 @@ Router (decode): rows per wave 1/2/4/8 = 30/34/34/35 us - latency bound (top-k t
   the tests pass.
 - Ops: restart scripts refuse to start a server while another model process runs (two at once OOM the box; a
   server start during the 262k reference run failed to load, no damage).
+
+## 2026-10-19 Sparse prefill attention (opt-in, JI_SPARSE_PF)
+
+**Gains (opt-in): prefill 79.6k 264.1 -> 358.5 t/s (8192 keys) / 313 (16384 + local 8192); 262k row ~2.4x faster
+(19.5 vs 47.6 min incl. load). Default decode / prefill unchanged.**
+
+Engine 4a61328e6 + sub-pages: ji_fa2_pmeta (32-key sub-page statistics: mean K, radius, var K, mean V) and
+ji_fa2_sparse (FA2 core; per workgroup of 4 positions: causal boundary by binary search on the mask, 128-key pages
+before boundary - JI_SPF_LOCAL scored by the bound around the mean (max over sub-pages, rows, heads), radix select of
+the budget + JI_SPF_SINK sink pages, exact attention over them + the local window, tail estimate of the rest per
+sub-page merged into the online softmax; dense fallback if the mask is not a causal prefix).
+
+| row (decode dense unless noted) | config | KL mean | p99 | top-1 |
+|---|---|---|---|---|
+| 32k | dense (harness floor) | 0.00022 | 0.003 | 99.9 % |
+| 32k | 4096 / 8192 / 16384 keys (128-key stats) | 0.00125 / 0.00066 / 0.00045 | 0.018 / 0.008 / 0.006 | |
+| 32k | 4096, tail dropped (mode 0) | 0.00372 | 0.051 | 98.8 % |
+| 32k | 4096, 32-key sub-pages | 0.00114 | 0.018 | 99.9 % |
+| 128k | 8192 / 16384 (128-key) | 0.00146 / 0.00129 | 0.022 / 0.016 | 98.6 / 99.2 % |
+| 128k | 16384 + var / + local 8192 | 0.00128 / 0.00124 | | |
+| 128k | 16384 + local 8192, sub-pages | 0.00117 | 0.018 | 99.5 % |
+| 128k | same + default sparse decode | 0.00183 (128-key: 0.00206) | 0.026 | 98.7 % |
+| 262k | 16384 + local 8192 (128-key) | 0.00164 | 0.018 | 99.0 % |
+
+Errors add: prefill and decode approximations together exceed the ~0.0015 bar (q8_0-KV level) at 128k. Budget and
+the variance term barely matter; the tail estimate matters most (3x lower KL than dropping). Opt-in for now
+(serve.sh documents it); default decision left to the user.
