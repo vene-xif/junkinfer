@@ -751,3 +751,37 @@ Real per-token time (JI_PROFILE, no GPU profiler): 21.7 ms = 20.2 GPU + 0.7 "rec
   Profiling note: the GPU profiler (JI_PROFILE_GPU) serialises dispatches, so concurrent small kernels look
   expensive; judge them by ablation. llama-completion at 262k ctx gets a 0 MiB expert-cache budget (the server
   gets ~900 MiB + elastic slots): use the server for decode measurements.
+
+## 2026-10-19 Sparse decode attention with tail estimation (Gemini research #2)
+
+**Gains: none shipped (off by default; JI_SP_BG / JI_SP_SEL experiments). Default decode / prefill t/s unchanged.**
+
+Engine 4f1013c74: unselected pages are no longer dropped but estimated from per-page statistics (RetroInfer /
+Multipole tripartite idea): attn_meta stores f16 mean K, per-dim K variance, mean V, cell count; attn_bg adds
+mass n*exp(q.muK + q^2.varK/2) with value muV as extra chunk partials for attn_merge. JI_SP_SEL=1 ranks pages
+by that mass estimate instead of the Quest bound (and drops the center/radius metadata).
+
+| row | selection | budget | KL mean | p99 | top-1 |
+|---|---|---|---|---|---|
+| L_code 32k | Quest, no tail | 4096 | 0.00906 | 0.085 | 98.6 % |
+| L_code 32k | Quest + tail (mean only / +var) | 4096 | 0.00331 / 0.00307 | 0.034 / 0.040 | 99.6 / 99.7 % |
+| L_code 32k | Quest + tail | 8192 / 16384 | 0.00179 / 0.00033 | 0.011 / 0.006 | 99.7 / 99.9 % |
+| L_code 32k | mass-oracle + tail | 4096 | 0.00090 | 0.014 | 99.8 % |
+| L_code 32k | mass estimate + tail | 4096 / 8192 | 0.00438 / 0.00101 | 0.026 / 0.018 | 99.4 / 99.9 % |
+| L_code 128k | Quest, no tail (earlier) | 16384 | 0.025 | 0.27 | 96.1 % |
+| L_code 128k | mass estimate + tail | 8192 / 16384 / 32768 | 0.00483 / 0.00340 / 0.00242 | 0.068 / 0.057 / 0.036 | 98.1 / 98.2 / 98.3 % |
+| L_code 128k | **Quest + tail** | **16384** | **0.00094** | 0.014 | 98.7 % |
+
+Speed (server, restored contexts, warm runs) and VRAM (metadata sized for the 262k context):
+
+| config | metadata | expert cache | 2k decode | 100k decode | 245k decode |
+|---|---|---|---|---|---|
+| dense (default) | 0 | 500 MiB | 43-44 | 28.5 | 20.6 |
+| mass + tail 8192 | 241 MiB | 256 MiB | 42-43 | 32.3 | 29.3 |
+| mass + tail 16384 / 32768 / 61440 | 241 MiB | 256 MiB | | | 27.8 / 26.7 / 25.7 |
+| Quest + tail 16384 | 401 MiB | 96 MiB | | | 20.0 |
+| first f32 layout (Quest + tail 4096) | 650 MiB | 0 | | | 6.3 (experts on CPU, buffers spilled) |
+
+The quality winner (Quest + tail) loses its attention gain to the expert cache at 245k: metadata VRAM is the
+binding cost. Next: shrink the Quest + tail metadata (8-bit center/radius, drop var, coarser bound pages) toward
+<= 250 MiB and re-measure. Prefill unaffected (decode-only path; one ~30-60 ms metadata rebuild per request).
