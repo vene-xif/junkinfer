@@ -13,7 +13,17 @@ Targets (dev box AUX-1; see README for the table):
 - MVP must include: OpenAI-compatible server, tool-call parsing, chat templates, prompt/prefix caching
 - release runs on one card; Linux; RX 470/570/580 8 GB first
 
-## Where we are (2026-10-16)
+## Where we are (2026-10-19)
+
+- **MVP usable** (README "Using it"): `scripts/serve.sh` (EXL3 4.0 bpw default, alias qwen3.6-35b-a3b, JI_HOST /
+  JI_API_KEY / JI_THINKING / JI_CACHE_RAM), `scripts/junkinfer.service`. `scripts/api_suite.py` (OpenAI + Anthropic
+  SDKs): 45/45 - chat, thinking separation, streaming, tools (parallel, typed args, code arguments, 24-tool agent
+  set, round trips, loops, tool_choice none/required/named), JSON / JSON schema, prompt caching across turns and tool
+  loops, Completions, Responses, Anthropic Messages (tools, tool_choice, thinking, streaming, Claude-Code-style),
+  disconnects, queued requests, long-output coherence; `--long`: 117k-token needle via the API (sparse attention).
+- Speed: decode ~45 t/s short, ~34 at 100k, ~31 at 245k; prefill ~450 t/s (7k), 264 (80k), 212 (117k).
+
+## Earlier status (2026-10-16)
 
 - **EXL3 served end to end** (community EXL3 4.0 bpw, `tools/exl3/exl3_to_gguf.py` -> 17.2 GiB GGUF on the SSD):
   `scripts/serve.sh /mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf` at 262k / q8_0 KV: prefill 310 t/s (6.6k),

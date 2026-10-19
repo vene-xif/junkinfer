@@ -1,10 +1,29 @@
 #!/usr/bin/env bash
 # JunkInfer server on one RX 580 (MVP: tuned mainline llama.cpp Vulkan from the engine fork).
 # usage: scripts/serve.sh [model.gguf] [extra llama-server args...]
+#
+# Environment (all optional):
+#   JI_HOST=0.0.0.0        listen address (default 127.0.0.1: local only)    JI_PORT=8080
+#   JI_API_KEY=secret      require "Authorization: Bearer secret" (OpenAI) / "x-api-key" (Anthropic)
+#   JI_ALIAS=name          model name reported to clients (default qwen3.6-35b-a3b)
+#   JI_THINKING=off        default thinking off (clients can still enable it per request with
+#                          chat_template_kwargs {"enable_thinking": true}); default: on
+#   JI_CTX=262144          context length    JI_CACHE_RAM=8192  host-RAM prompt cache (MiB) for switching conversations
+#   JI_SLOT_DIR=dir        enable slot save/restore to disk
+# Endpoints: OpenAI /v1/chat/completions, /v1/completions, /v1/responses, /v1/models; Anthropic /v1/messages.
 set -euo pipefail
 ENGINE=${JUNKINFER_ENGINE:-$HOME/junkinfer/engine/build/bin}
-MODEL=${1:-/mnt/ssd/models/Qwen3.6-35B-IQ4_NL.gguf}
+DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf
+[ -f "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-IQ4_NL.gguf
+MODEL=${1:-$DEFAULT_MODEL}
 shift || true
+
+# client-facing options shared by both engines
+API_ARGS=(--alias "${JI_ALIAS:-qwen3.6-35b-a3b}" --cache-ram "${JI_CACHE_RAM:-8192}")
+[ -n "${JI_API_KEY:-}" ] && API_ARGS+=(--api-key "$JI_API_KEY")
+case "${JI_THINKING:-on}" in
+  off|0|false|no) API_ARGS+=(--reasoning off) ;;
+esac
 
 # RADV: keep device-local allocations out of GTT when VRAM is nearly full (2.5x decode on this card, Aug 2026)
 export RADV_PERFTEST=${RADV_PERFTEST-nogttspill}
@@ -32,7 +51,7 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
     -c "${JI_CTX:-262144}" -ctk q8_0 -ctv q8_0 \
     -np 1 --jinja -t "${JI_THREADS:-6}" -b "$UB" -ub "$UB" \
     --host "${JI_HOST:-127.0.0.1}" --port "${JI_PORT:-8080}" \
-    "${SLOT_ARGS[@]}" "$@"
+    "${SLOT_ARGS[@]}" "${API_ARGS[@]}" "$@"
 fi
 # JI_ENGINE=ggml: tuned mainline llama.cpp Vulkan path (MVP v0), q8_0 KV, full 262k context
 exec "$ENGINE/llama-server" -m "$MODEL" \
@@ -40,4 +59,4 @@ exec "$ENGINE/llama-server" -m "$MODEL" \
   -c "${JI_CTX:-262144}" -ctk q8_0 -ctv q8_0 \
   -np 1 --jinja \
   --host "${JI_HOST:-127.0.0.1}" --port "${JI_PORT:-8080}" \
-  "$@"
+  "${API_ARGS[@]}" "$@"

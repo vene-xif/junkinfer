@@ -1,0 +1,23 @@
+# JunkInfer server as a systemd service (template).
+# install:  sudo cp scripts/junkinfer.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#           sudo systemctl enable --now junkinfer        (logs: journalctl -u junkinfer -f)
+# options:  /etc/junkinfer.env, e.g.  JI_HOST=0.0.0.0  JI_API_KEY=...  JI_THINKING=off  (see scripts/serve.sh)
+# Only one model process may run on the card at a time: stop the service before benchmarks.
+[Unit]
+Description=JunkInfer LLM server (Qwen3.6-35B-A3B on RX 580)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vene
+WorkingDirectory=/home/vene/junkinfer
+EnvironmentFile=-/etc/junkinfer.env
+ExecStart=/home/vene/junkinfer/scripts/serve.sh
+Restart=on-failure
+RestartSec=10
+# pinned expert memory
+LimitMEMLOCK=infinity
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
