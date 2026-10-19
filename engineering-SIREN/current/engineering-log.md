@@ -862,3 +862,26 @@ Engine: the halves are summed in f16 (exllamav3 does the same, __hadd -> half W_
 dequant / CPU path. RADV reports shaderFloat16 = false on gfx8 (it is tied to packed 16-bit math); ACO emits the
 scalar f16 add. PPL 4.7578 -> 4.7315; KL vs the old kernels' reference 0.00071 (32k). Remaining codebook cost is the
 multiply (~16 us of 78 on 8192x2048); the rest of the gap to the trivial decode is the conversion and extraction.
+
+## 2026-10-19 Prefill: EXL3 GEMM pipelining + BK16, worst-case output reservation
+
+**Gains: prefill 7.2k 393.3 -> 447.6 t/s (+14%); 79.6k (llama-completion) 225.8 -> 264.1 t/s (+17%), server 263.4.
+Decode unchanged (45 t/s short, 31.1 at 245k).**
+
+| change (engine) | prefill 7.2k | note |
+|---|---|---|
+| f16 codebook sum (8ba2c0db8) | 392.8 -> 393.3 | GEMMs are not codebook-bound |
+| GEMM: next k step's loads during decode + FMAs (1d0a96376) | 393.3 -> 401.4 | output identical |
+| GEMM: 16-deep k steps for the fused 4-bit dense / MoE kernels (6c8cb9f29) | 401.4 -> 447.6 | 128 -> 64 VGPRs, LDS 26.5 -> 13.5 KB; X3F epilogue in BK-column groups |
+| tried: non-unrolled decode loop / dense 128-col + BK16 / MoE 32-col + BK16 | 445 / 447 / 425 | kept defaults |
+
+Per-op (perf logger, 7.2k): dense 8192x2048 GEMM 41.1 -> 35.1 ms per ubatch-op (3.34 -> 3.9 TFLOPS, 63 % of peak);
+MoE gate/up 27.9 -> 23.4 ms (~2.9 TFLOPS incl. ~1/3 tile padding).
+
+**Worst-case output reservation (a440dface).** A 79.6k llama-completion prefill spent 137 s of 363 with the GPU idle;
+perf showed amdgpu_cs_ioctl -> ttm_bo_validate -> ttm_lru_walk_for_evict on every submit: VRAM was full (64 MiB
+free). llama.cpp reserved the prompt graph for n_ubatch outputs = 4 GiB of f32 logits (248k vocab) in the compute
+buffer (ctx 90k: 5192 MiB; 262k: 6536 MiB + 2720 KV + 1289 weights > 8 GiB). Now reserved for <= 64 outputs
+(JI_RESERVE_OUTPUTS; batches needing more re-reserve on demand, PPL identical): 1312 / 2656 MiB. The server already
+capped n_outputs_max, so server numbers were not affected; benchmarks / junk-ref / CLI were (earlier CLI prefill
+figures at long contexts were pessimistic).
