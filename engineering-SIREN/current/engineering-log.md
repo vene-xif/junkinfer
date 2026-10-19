@@ -823,3 +823,20 @@ attn_score 82 -> 110 us (now also writes the estimates). Sparse attention ~4.2 m
 | after tuning | 30.9 | | |
 
 Open: KL at 245k (reference L_code r2 being generated), then default-on above a context threshold.
+
+## 2026-10-19 Sparse decode attention default-on (>= 96k cells)
+
+**Gains: decode 245k 20.5 -> 29.6 t/s (+44%); short decode unchanged (42.9, noise); prefill unchanged (392.8 at 7.2k).**
+
+262k gate (new reference L_code r2, 261k prefix, generated with full attention; state cached in jref/):
+
+| budget (+ tail, mean bound) | KL mean | p99 | max | top-1 |
+|---|---|---|---|---|
+| 8192 | 0.00109 | 0.013 | 0.036 | 99.2 % |
+| 16384 (default) | 0.00107 | 0.013 | 0.029 | 99.3 % |
+| 32768 | 0.00111 | 0.012 | 0.045 | 99.3 % |
+
+KL is flat in the budget at 262k (floor ~0.0011 from the estimated tail), below the q8_0-KV bar. Defaults:
+JI_SPARSE=16384, JI_SP_BG=1, JI_SP_MIN=98304 (128k and 262k measured; 64k-96k stays dense until gated). Metadata
+241 MiB only when n_ctx >= JI_SP_MIN (expert cache 500 -> 255 MiB). 100k with sparse forced on: 28.9 -> 34.0 t/s.
+Full-attention references must set JI_SPARSE=0 (mkrefs.sh does).
