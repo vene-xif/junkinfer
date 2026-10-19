@@ -785,3 +785,13 @@ Speed (server, restored contexts, warm runs) and VRAM (metadata sized for the 26
 The quality winner (Quest + tail) loses its attention gain to the expert cache at 245k: metadata VRAM is the
 binding cost. Next: shrink the Quest + tail metadata (8-bit center/radius, drop var, coarser bound pages) toward
 <= 250 MiB and re-measure. Prefill unaffected (decode-only path; one ~30-60 ms metadata rebuild per request).
+
+## 2026-10-19 Prefill small-op fusion: MULTI_ADD on gfx8
+
+**Gains: prefill 7.2k 387.9 -> 392.8 t/s (+1.3%); decode unchanged (43-44 short, 20.6 at 245k).**
+
+Engine: ggml-vulkan gated MULTI_ADD on shaderRoundingModeRTEFloat16, which RADV POLARIS10 lacks; the shaders are
+f32-only, so the gate is lifted for AMD. ~400 full-size f32 ADDs per 4096-token ubatch (MoE expert sums,
+residuals) become multi-adds: ADD GPU time 443 -> 198 ms. PPL identical (4.7578). Remaining small ops on the 7.2k
+prompt (RMS_NORM 130, CONCAT 99, GLU 74, MUL 63, SILU_MUL 58, SCALE 47 ms; ~2.7 % of GPU time) are worth < 1 %
+each - deferred behind the sparse-attention metadata work (4b) and the EXL3 prefill GEMMs.
