@@ -920,3 +920,23 @@ Router (decode): rows per wave 1/2/4/8 = 30/34/34/35 us - latency bound (top-k t
 - KL harness note: since a440dface the dense L_code 32k KL vs its reference is 0.00022 (0 with JI_RESERVE_OUTPUTS=0):
   in junk-ref's 262k context the smaller compute buffer holds fewer JDE elastic slots, so more expert misses run on
   the CPU (different f32 summation order). KL runs are 6.6x faster (37 vs 247 s: no eviction churn).
+
+## 2026-10-19 MVP: usable server (API suite 45/45, real agent client)
+
+**Gains: usability; decode / prefill unchanged (45 t/s short; 447 t/s prefill at 7.2k).**
+
+- `scripts/api_suite.py` (OpenAI 3.35 + Anthropic 1.15 SDKs): first run 36/38. Failures: tool_choice "required"
+  produced chat text that degenerated into emoji runs, and named tool_choice objects were ignored. Causes: the
+  Qwen3-Coder / Qwen3.6 grammar (common/parsers/qwen3-coder.cpp; also the auto-parser's three tool formats) allowed
+  free content before a mandatory call, and the server parsed tool_choice as a string. Fixed (engine 690f73171):
+  forced calls follow the reasoning directly; tool_choice objects of OpenAI chat / Responses / Anthropic narrow the
+  tools to the named function and force a call. Now 45/45 incl. code-content arguments (multi-line Python through
+  the XML tool format), a 24-tool coding-agent set, a 6-turn agent session (63 new prompt tokens per turn), a
+  Claude-Code-shaped Anthropic request (system blocks with cache_control, tools, thinking, streaming), and --long:
+  a 117k-token needle through the API (prefill 212 t/s, sparse attention active, correct answer).
+- serve.sh: EXL3 default model, alias qwen3.6-35b-a3b, JI_HOST / JI_API_KEY (401 without it, OpenAI bearer and
+  Anthropic x-api-key) / JI_THINKING (off by default, enable per request) / JI_CACHE_RAM; systemd unit template.
+- Real client: aider 0.86.2 (diff edit format) added a function and a unittest file to a scratch repo and committed;
+  the tests pass.
+- Ops: restart scripts refuse to start a server while another model process runs (two at once OOM the box; a
+  server start during the 262k reference run failed to load, no damage).
