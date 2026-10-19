@@ -33,6 +33,7 @@ Status: ACTIVE. Started 2026-10-15.
 | candidate | source | status | notes |
 |---|---|---|---|
 | Quest page selection (per-page key bounds, top-k pages + sink + recent window) | Quest (2024) | IN PROGRESS (JDE `attn_meta/score/topk`, `JI_SPARSE`) | simplest GPU-friendly selector; metadata ~6 % of q8_0 KV (1 KB per 32-cell page and kv head) |
+| Tail estimation of unselected pages (page mean K / var / mean V, tripartite attention) | RetroInfer / Multipole Attention (2025), SparQ mean-V | OPT-IN, PASSES KL AT 128k (`JI_SP_BG`, engine 7e30faaac): 245k decode 20.6 -> 30.9 t/s, 241 MiB | KL 0.025 -> 0.0011-0.0014 at 128k; 245k gate pending |
 | Adaptive top-p budgets over estimated attention mass | Twilight (arXiv 2502.02770) | CANDIDATE | prunes per step by cumulative mass instead of a fixed k; needs a cheap score estimate per page / token |
 | Low-rank pre-RoPE keys + offloaded V, exact sparse reconstruction | ShadowKV (ICML 2025) | NOTED | targets batch throughput / CPU offload; selection accuracy better than Quest in their tables |
 | Clustered retrieval (wave index) / drift-robust retrieval | RetroInfer (VLDB), ParisKV (arXiv 2602.07721) | NOTED | ParisKV reported highest accuracy among sparse methods in its comparison; heavier indexing |

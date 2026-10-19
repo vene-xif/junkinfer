@@ -795,3 +795,31 @@ f32-only, so the gate is lifted for AMD. ~400 full-size f32 ADDs per 4096-token 
 residuals) become multi-adds: ADD GPU time 443 -> 198 ms. PPL identical (4.7578). Remaining small ops on the 7.2k
 prompt (RMS_NORM 130, CONCAT 99, GLU 74, MUL 63, SILU_MUL 58, SCALE 47 ms; ~2.7 % of GPU time) are worth < 1 %
 each - deferred behind the sparse-attention metadata work (4b) and the EXL3 prefill GEMMs.
+
+## 2026-10-19 Sparse decode attention: mean-centered bound, 241 MiB, kernel tuning
+
+**Gains: none shipped by default (JI_SPARSE=8192 JI_SP_BG=1 opt-in): decode 245k 20.6 (dense) -> 30.9 t/s, 100k
+28.5 -> ~32; default decode / prefill unchanged (43-44 short; prefill 7.2k 392.8).**
+
+Engine 7e30faaac. The Quest center/radius block is replaced by a bound around the page mean (q.mu + |q|.r with r =
+max |k - mu| per dim, still a valid upper bound), so the metadata is one dim-major f16 layout: mean K, radius,
+(var K with JI_SP_BG=2), mean V, count = 1.5 KB per page and kv head, 241 MiB at 262k ctx (expert cache 500 -> 256
+MiB; short-context decode unaffected thanks to the elastic slots). Quality is better than the Quest bound:
+
+| row | config | KL mean | p99 | top-1 |
+|---|---|---|---|---|
+| L_code 32k | mean bound + tail (var) 4096 | 0.00229 (Quest bound: 0.00305) | 0.033 | 99.4 % |
+| L_code 128k | mean bound + tail 8192 / 16384 | 0.00139 / 0.00114 | 0.019 / 0.013 | 98.2 / 98.6 % |
+| L_code 128k | mean bound + tail (var) 16384 | 0.00092 | 0.012 | 98.7 % |
+
+Kernel tuning (GPU profile per layer at 245k, budget 8192): attn_hm + attn_bg 407 -> 183 us (bg: page compaction by
+ballot prefix, independent loads, wave reductions, reuses attn_score's log-mass estimates), attn_topk 182 -> 83 us
+(keys cached in padded LDS, parallel suffix scan), attn_meta 49 -> 6 us (decode: only on page completion),
+attn_score 82 -> 110 us (now also writes the estimates). Sparse attention ~4.2 ms/token vs dense ~20 ms.
+
+| 245k decode (t/s) | 8192 | 16384 | 16384 + var (321 MiB) |
+|---|---|---|---|
+| before tuning | 28.6 | 26.7 | 27.5 |
+| after tuning | 30.9 | | |
+
+Open: KL at 245k (reference L_code r2 being generated), then default-on above a context threshold.
