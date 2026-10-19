@@ -1031,3 +1031,24 @@ Other report items judged low value here: async SDMA copies (no transfer queue),
 quantization), eviction guards / LRFU (+1-4 % hit rate in the literature; may revisit).
 MTP low-bit (uncalibrated): Q3_K 0.613, IQ3_S 0.563, Q2_K 0.550 at t=0 (IQ4_NL 0.644) - the knee is below 4 bit,
 where calibrated quantization of the MTP block (imatrix / GPTQ) could recover acceptance.
+
+## 2026-10-19 Gemini report 2 (speculative decoding) + speculative-position substitution + tail diagnostics
+
+**Gains: none by default. API suite 46/46 with sparse prefill on; 117k needle prefill 212 -> 338 t/s.**
+
+Report https://share.gemini.google/OwGeIe5VcENL (prompt "speculative decoding when verify cost scales with distinct
+experts"). Useful: lossless grouped verify (one read per distinct expert across verified tokens), AcceptMoE (root
+token exact, speculative positions restricted to resident experts), suffix-automaton drafting with JSON-escaped
+indexing for agentic edits (AgSpec / SAM-Decoding), dynamic draft vocabulary (NanoSpec: context window + base top-K +
+~4k common tokens, 512-3072 ids), p-min gating. Contradicted here: "quant-drafter alignment" (higher-precision MTP
+heads collapsing acceptance) - our sweep is flat from Q5_K to BF16.
+
+AcceptMoE-style test (router substitution only at token index >= 1 of a ubatch, JI_SUBST_TK0=1): KL 0.050 (first
+choice kept) / 0.075 (all misses) in 4-token tail batches; n-gram speculation (map-k, n 4 / m 3) on the code rewrite
+37.2 -> 50.1 t/s (no speculation 33.0). Too lossy: the approximated positions' logits pick the accepted tokens.
+
+Tail-estimation diagnostics (attn_bgx, L_code 128k, decode sparse 16384): estimate with variance (JI_SP_BG=2) 0.00089;
+exact page mass + mean V (8) 0.00019 (= harness floor); estimated mass + exact page value (9) 0.00082. The page-mass
+estimate is the error; the mean value is good enough. Default JI_SP_BG=1 is 0.00128 at this row -> the variance term
+alone cuts ~30 %. Next for sparse quality: better page-mass estimates (variance term, low-rank page covariance,
+low-bit key sketches - VRAM permitting).
