@@ -885,3 +885,20 @@ buffer (ctx 90k: 5192 MiB; 262k: 6536 MiB + 2720 KV + 1289 weights > 8 GiB). Now
 (JI_RESERVE_OUTPUTS; batches needing more re-reserve on demand, PPL identical): 1312 / 2656 MiB. The server already
 capped n_outputs_max, so server numbers were not affected; benchmarks / junk-ref / CLI were (earlier CLI prefill
 figures at long contexts were pessimistic).
+
+## 2026-10-19 Sparse-attention gate around the threshold; references regenerated
+
+References L_code r0 (32k) and r1 (128k) regenerated with the current kernels (f16 codebook sum; old ones in
+~/jt/refs_old, old prefix states in /mnt/ssd/kvcache/jref_old; r2 262k still the pre-f16 reference). New rows cut from
+L_code (same scoring rule: last 1024 positions): L_code64 (64k, from r1) and L_code98 (100k, from r2), references
+with JI_SPARSE=0.
+
+| row | budget (+ tail) | KL mean | p99 | top-1 |
+|---|---|---|---|---|
+| L_code64 (64k) | 8192 / 16384 | 0.0036 / 0.0023 | 0.051 / 0.031 | 98.6 / 99.3 % |
+| L_code98 (100k) | 16384 (default) / 32768 | 0.00101 / 0.00090 | 0.018 / 0.017 | 99.6 / 99.7 % |
+| L_code r1 (128k, new ref) | 16384 (default) / 32768 | 0.00128 / 0.00110 | 0.023 / 0.020 | 99.1 / 98.9 % |
+
+The 64k row fails even at 25 % of the context: quality depends on content, not only on the selected fraction. The
+default threshold (JI_SP_MIN = 98304) stays: every measured row >= 96k passes at the default budget.
+Router (decode): rows per wave 1/2/4/8 = 30/34/34/35 us - latency bound (top-k tail); unchanged.
