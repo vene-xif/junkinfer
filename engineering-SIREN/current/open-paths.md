@@ -16,8 +16,8 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 | # | Path | Status | Expected gain | Cost / risk |
 |---|---|---|---|---|
 | 1 | ~~245k decode regression~~ RESOLVED: page cache after the 18 GB download (24.5-26.9 t/s); after drop_caches 29.3-30.0 t/s | done | - | drop caches before speed runs |
-| 2 | Per-layer exact prompt tail default (JI_SPF_TAIL_LAYERS=3,7,11) | measured, code default set, not committed | prefill 132k 305.5 -> 318.9 t/s (+4.4 %) for KL 0.00035 -> 0.00038 | build + API suite, commit |
-| 3 | Per-layer dense DECODE attention (JI_SP_DENSE_LAYERS, e.g. 3,7,11 or 7,11) | implemented (attn_hm / attn_merge flag), not built | decode KL 0.00033 -> toward 0.0001; cost ~1.3 ms per dense layer at 245k (~-4 % per layer) | KL on 3 rows + 245k / 72k speed |
+| 2 | ~~Per-layer exact prompt tail default (JI_SPF_TAIL_LAYERS=3,7,11)~~ DONE (engine f5ddada15): prefill 132k 305.5 -> 318.7 t/s, prefill KL 0.00035 -> 0.00038 | done | - | - |
+| 3 | Per-layer dense DECODE attention (JI_SP_DENSE_LAYERS) MEASURED: 3,7,11 -> decode KL 0.00004-0.00006 (harness floor) for -6 % at 100k / -13 % at 245k; 7,11 -> KL 0.00006-0.00030 for -3 % / -9 %. Opt-in quality setting; default stays sparse | user decision | quality vs speed | - |
 | 4 | ~~Reboot with `iommu=pt` + `amdgpu.lockup_timeout`~~ DONE 2026-10-20: iommu=pt neutral (245k 29.4-29.7 vs 29.3-30.0, 2k 43-45.5); lockup timeout 60/120 s active (long jobs no longer need splitting - unverified) | done | - | - |
 | 5 | LM head in a non-EXL3 format: IQ4_NL / Q5_K / Q6_K from the BF16 head (mtp-BF16.gguf), CPU `llama-quantize`; JDE has these mat-vec kernels | OPEN | head 2.2 ms -> ~1.3 ms (IQ4_NL): ~+5-7 % decode; frees ~100 MB VRAM for the expert cache | rewrite GGUF output tensor; KL gate |
 | 6 | Dynamic top-k: drop routed experts with gate < tau * sum (ik "Smart Expert Reduction"), renormalise | OPEN (router_fused push constant) | report 5: 8 -> ~6.2 experts at tau 0.025, KL < 0.001 claimed -> fewer misses (~+10-20 % decode) | KL sweep tau 0.01-0.04; differs from the rejected miss substitution (drops by gate, not by cache state) |

@@ -14,6 +14,8 @@
 #   the prompt's last 4096 positions exact; +30 % at 80k, ~2.4x at 262k) and decode from 32k (JI_SPARSE=16384, +8 % at
 #   72k, +44 % at 245k); KL vs full attention ~0.00045 for both together at 130k (on top of the weight / KV
 #   quantization error). JI_SPARSE_PF=0 / JI_SPARSE=0 turn them off.
+#   JI_SP_DENSE_LAYERS=3,7,11: max-quality decode (sparse decode KL ~0.00033 -> ~0.00005, the harness floor) for -6 % at
+#   100k / -13 % decode at 245k.
 # Endpoints: OpenAI /v1/chat/completions, /v1/completions, /v1/responses, /v1/models; Anthropic /v1/messages.
 set -euo pipefail
 ENGINE=${JUNKINFER_ENGINE:-$HOME/junkinfer/engine/build/bin}

@@ -1188,3 +1188,23 @@ special tokens in its padding slots, vocab 248,144, head 248,192 rows):
   template, vocabulary padded to the head's rows (the head's output Hadamard needs whole 128-row blocks).
 - On gfx803 mul1 is not cheaper than mcg as plain GLSL (byte sum by shifts); a v_sad_u8 lowering would make it ~20 %
   cheaper per weight. Speed upside of MiniCPM comes from smaller experts (cache capacity, PCIe bytes).
+
+## 2026-10-20 Per-layer dense decode (opt-in), regression of the generic EXL3 build - engine f5ddada15
+
+**Gains: prefill 132k 305.5 -> 318.7 t/s (per-layer prompt tail, default); decode unchanged (2k ~44, 100k 34.5,
+245k 29.9 t/s); opt-in max-quality decode.**
+
+Generic-width / mul1 build on the current 4/6-bit mcg model: decode KL 0.00033 (unchanged), prefill 318.7 t/s, 2k
+decode 44 t/s. Measurement hygiene: a full page cache (after a KL run or a big download) slows 245k decode ~10 %;
+`~/jt/restart.sh` now drops caches before starting the server.
+
+JI_SP_DENSE_LAYERS (attention layers kept dense on sparse decode steps):
+
+| config | 100k t/s | 245k t/s | decode KL 99k / 130k / 245k |
+|---|---|---|---|
+| default (all sparse) | 34.5 | 29.9 | 0.00036 / 0.00033 / 0.00029 |
+| dense 7,11 | 33.6 | 27.2 | 0.00030 / 0.00006 / 0.00009 |
+| dense 3,7,11 | 32.4 | 26.0 | 0.00004 / 0.00006 / 0.00004 |
+
+Three dense layers bring sparse decode to the harness floor (dense 0.00007) but every token re-reads those layers'
+whole KV: -13 % at 245k. Default stays sparse; documented as the max-quality setting in serve.sh.
