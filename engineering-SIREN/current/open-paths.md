@@ -5,7 +5,7 @@
 > Last update: 2026-10-20.
 
 Current numbers (AUX-1, EXL3 4.0 bpw, q8_0 KV, sparse attention on): decode ~44 t/s short, ~35 at 72k, ~32 at
-100k, 29.6 at 245k (2026-10-19; 24.5-26.9 measured 2026-10-20 - see item 1); prefill ~450 t/s (7k), 305-319 t/s
+100k, 29.4-30.0 at 245k; prefill ~450 t/s (7k), 305-319 t/s
 (132k), ~230 (262k). Combined sparse KL vs full attention ~0.00045 at 130k.
 Targets: single card decode >= 50 t/s at any depth; dual card decode >= 80, prefill >= 1000 / >= 500 (262k).
 
@@ -15,10 +15,10 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 
 | # | Path | Status | Expected gain | Cost / risk |
 |---|---|---|---|---|
-| 1 | **245k decode regression check**: 24.5-26.9 t/s on 2026-10-20 vs 29.55 on 2026-10-19 (same test). Clocks / DPM are high (sclk 7, mclk 2), RAM fine. Suspects: the uncommitted build (GGML_TYPE_COUNT change, per-layer tail code), page cache after the 18 GB download, thermal | OPEN, first thing | restore ~+10 % at 245k | bisect: committed build vs working tree |
+| 1 | ~~245k decode regression~~ RESOLVED: page cache after the 18 GB download (24.5-26.9 t/s); after drop_caches 29.3-30.0 t/s | done | - | drop caches before speed runs |
 | 2 | Per-layer exact prompt tail default (JI_SPF_TAIL_LAYERS=3,7,11) | measured, code default set, not committed | prefill 132k 305.5 -> 318.9 t/s (+4.4 %) for KL 0.00035 -> 0.00038 | build + API suite, commit |
 | 3 | Per-layer dense DECODE attention (JI_SP_DENSE_LAYERS, e.g. 3,7,11 or 7,11) | implemented (attn_hm / attn_merge flag), not built | decode KL 0.00033 -> toward 0.0001; cost ~1.3 ms per dense layer at 245k (~-4 % per layer) | KL on 3 rows + 245k / 72k speed |
-| 4 | Reboot with `iommu=pt` + `amdgpu.lockup_timeout=60000,120000,60000,60000` | user-approved, pending | report 4 claims +8-15 % zero-copy bandwidth; the timeout removes the ~2 s job limit (long-context kernels no longer need splitting) | reboot AUX, re-measure 2k / 245k decode |
+| 4 | ~~Reboot with `iommu=pt` + `amdgpu.lockup_timeout`~~ DONE 2026-10-20: iommu=pt neutral (245k 29.4-29.7 vs 29.3-30.0, 2k 43-45.5); lockup timeout 60/120 s active (long jobs no longer need splitting - unverified) | done | - | - |
 | 5 | LM head in a non-EXL3 format: IQ4_NL / Q5_K / Q6_K from the BF16 head (mtp-BF16.gguf), CPU `llama-quantize`; JDE has these mat-vec kernels | OPEN | head 2.2 ms -> ~1.3 ms (IQ4_NL): ~+5-7 % decode; frees ~100 MB VRAM for the expert cache | rewrite GGUF output tensor; KL gate |
 | 6 | Dynamic top-k: drop routed experts with gate < tau * sum (ik "Smart Expert Reduction"), renormalise | OPEN (router_fused push constant) | report 5: 8 -> ~6.2 experts at tau 0.025, KL < 0.001 claimed -> fewer misses (~+10-20 % decode) | KL sweep tau 0.01-0.04; differs from the rejected miss substitution (drops by gate, not by cache state) |
 | 7 | `v_sad_u8` from GLSL (GL_EXT_integer_dot_product `dotPacked4x8EXT(x, 0x01010101)`) - does RADV/ACO lower it to sad / cheap ops on gfx803? | OPEN | mul1 decode ~20 % cheaper per weight | ISA dump of a test shader |
@@ -75,7 +75,7 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
   (no KL gain), miss substitution (KL 0.002-0.05), speculative-position substitution (KL 0.05).
 - Sparse prefill: raw-basis statistics as built (code-gen regression), semi-dense tail (32k budget: KL 0.00072 at -2 %;
   dominated by the per-layer exact tail), PV-skip (never triggers).
-- System: PCIe MaxReadReq 4096, THP always, CPU share of misses (JI_X3_ZC 5-7): no gain (2026-10-20).
+- System: PCIe MaxReadReq 4096, THP always, CPU share of misses (JI_X3_ZC 5-7), iommu=pt: no gain (2026-10-20).
 - MTP on one card (all quants ~3x slower than no speculation), u24 multiply in the trellis decode (not the limiter),
   codebook lookup tables (64k entries: too big for LDS, TA-bound through L1), FA2 head-dim split (our kernel already
   avoids the register problem), low-rank / SVD experts (full rank), static pruning beyond ~12.5 %, IQ4_NL transcode of
