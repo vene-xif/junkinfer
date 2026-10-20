@@ -1216,3 +1216,11 @@ quantized by llama-quantize (IQ4_NL 273 MB, Q5_K 333 MB; EXL3 6-bit head 381 MB)
 t/s, 245k ~29.5 -> ~30.8, but KL 0.00033 -> 0.0044 (130k row), 0.00036 -> 0.0026 (99k), top-1 0.997 -> 0.976 - ten
 times the sparse-attention KL for +4-6 %. The trellis 6-bit head is far better per byte; a cheaper head needs an EXL3
 re-quantization (~4 bpw).
+
+## 2026-10-20 Dynamic top-k (gate threshold): rejected
+
+JI_TOPK_TAU (router_fused: experts after the first below tau of the normalised gate weight dropped, id -2, the rest
+renormalised). KL 99k / 130k: tau 0.02 0.00164 / 0.00077, 0.04 0.00696 / 0.00217, 0.06 0.0305 / 0.0062 (baseline
+0.00036 / 0.00033). Decode 2k 44.7 -> 44.7 / 45.1 / 45.7, 245k ~29.4 -> 29.2-29.8: no gain - all experts of a layer run
+in one parallel dispatch, the critical path is not the dropped low-weight expert. Report 5's "< 0.001 KL" does not
+hold here. Option kept (off).
