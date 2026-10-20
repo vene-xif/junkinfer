@@ -1310,3 +1310,6 @@ of expert upload) - card 2 only removes its layers' upload. Dual decode gains co
 work of 8-9 layers running from a card whose VRAM is not shared with an expert cache.
 Next for dual: prefill pipelining across the cards (~1.3x ceiling with card 2 resident-only), decode expert-server
 (hot experts of all layers on card 2, per-layer parallel), MTP verify on two cards.
+Prefill from scratch (fresh JR_STATE_DIR, L_code r1 130k): KL 0.00059 single = 0.00059 dual32 ub4096 (identical
+p99/max/top1) - the dual prefill is exact too. Open question (not dual): the saved prefix state used by kl.sh gives
+0.00033; find which prefill config produced it (dense tail / raw basis / budget) before trusting either number.
