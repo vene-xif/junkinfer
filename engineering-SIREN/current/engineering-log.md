@@ -1345,3 +1345,31 @@ mat-vecs 11.3 of 32.4 ms, attention 5.6, dense ~10, head 2.2): the full helper w
 KL L_code r1 (130k, 1-token steps): single 0.00036, TP 0.00035 (summation order differs, not bit-exact).
 Next on two GPUs: the helper is idle ~15 ms of every token - attention KV-head split at depth (helper owns kv head
 1 + a head-1 KV mirror; 2 syncs per attention layer), dense head split (GDN state mirror), prefill pipelining.
+
+## 2026-10-21 Full tensor-parallel decode on two GPUs (JI_TP=2, engine c4f8da270)
+
+**Gains vs single card (same build, 262k ctx, helper expert share 0.7): decode short 46.3 -> 58.0 t/s (+25 %),
+100k 33.8 -> 43.8 (+30 %), 245k 30.0 -> 40.0 (+33 %). Prefill unchanged. KL 130k (1-token steps) 0.00036 = single.**
+
+Why TP-MoE alone (JI_TP=1) plateaued at ~50: decode is a latency chain (~500 dependent dispatches per token) of
+ALU-bound trellis mat-vecs (~200 G weights/s, ~3 G weights per token); barriers are cheap (2.5 us, lab/xsync
+chain.cpp). Moving experts to the helper only helps by the amount of the primary's work it removes in parallel,
+and the helper's MoE chain has ~50 us fixed latency per layer. So both GPUs must split *every* layer.
+
+JI_TP=2: rank r runs Gated DeltaNet key heads [8r, 8r+8) (+ value heads h, h+16): wqkv rows in four 1024-row blocks,
+z in two, gdn_fused with a key-head offset, ssm_out over its K quarters {r, r+2}; shared expert rows [256r, +256)
+and its down projection's K half; routed experts by ownership; LM head vocab half (helper writes to host memory).
+Attention stays on the primary (the helper adds a zero partial). All-reduce after the mixer and after the MoE:
+partial -> exchange, marker, relay, CP event wait, x += p0 + p1 (rank-0 partial first on both: identical x).
+x3_mv/x3_post gained K-part masks and row subsets (no new kernels); JI_TP_TEST=1 verifies them (rows exact,
+K parts <= 5e-7). The helper holds a 1 GB copy of the dense weights it needs + a 63 MB recurrent-state mirror; its
+heads' state is copied back (state out, ~300 ms, not yet optimised) before graph ubatches / state saves / non-TP
+steps and copied in (~80 ms) before the first TP step.
+
+Steps (short decode, 256 tokens): first TP2 52.2 -> host-side fixes (embedding built on the host instead of
+read back over the BAR, helper submit on the relay thread, cache fills on the graphics queue) 53.9 -> LM head
+split 58.0. JI_TP_PROF (frac 0.85): primary work 10.2 ms + 4.35 in syncs, helper 10.7 + 4.0, sync floor 1.57 ms
+per token (~19 us per sync point); the rest of the waiting is per-segment imbalance - attention layers (primary
+only) and the per-layer expert split.
+Next: attention kv-head split on the helper (removes the attention imbalance; at depth also halves attention),
+faster state out, then MTP / speculation on the cheaper verify.

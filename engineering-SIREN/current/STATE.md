@@ -25,14 +25,12 @@ Targets (dev box AUX-1; see README for the table):
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
-## Resume point (2026-10-20 evening, two RX 580s)
+## Resume point (2026-10-21, two RX 580s)
 
-AUX-1: Vulkan1 = x16 card, Vulkan0 = chipset x4 card (1.27 GB/s). Best dual mode: `JI_TP=1 scripts/serve.sh`
-(engine efad9ea7e): decode short 49.9, 100k 41.0, 245k 37.9 t/s (single 46.9 / 33.8 / 30.0); prefill = single
-(~348 t/s at 80k). Layer split JI_DUAL=32 still available (49.8 / 36.3 / 33.0). kl.sh takes TP=1 or DUAL=S UB=N.
-Cross-GPU sync facts and probes: engineering log 2026-10-20 (later), lab/xsync.
-Next: attention kv-head split on the TP helper, dense head split, prefill pipelining, MTP; vision (Qwen3.6 mmproj
-download approved, HyperQwen #36).
+AUX-1: Vulkan1 = x16 card, Vulkan0 = chipset x4 card. Best dual mode: `JI_TP=2 scripts/serve.sh` (engine c4f8da270+):
+decode short 58.0, 100k 43.8, 245k 40.0 t/s (single 46.3 / 33.8 / 30.0); prefill = single (~348 t/s at 80k).
+JI_TP=1 (MoE only) and JI_DUAL=32 (layer split) remain. kl.sh TP=2 / TP=1 / DUAL=S. Profiling: JI_TP_PROF=64.
+Next: attention kv-head split, TP2 state copy-back speed, prefill on two cards, MTP; vision (mmproj approved).
 
 ## Open optimization paths
 
