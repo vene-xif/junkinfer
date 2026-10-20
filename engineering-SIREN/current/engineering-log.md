@@ -1396,3 +1396,22 @@ request at long context, single card too).** Single card on the same build: 46.3
 - JI_TP_PROF waits by sync type (frac 0.5, short): after mixer ~0.96 ms per GPU (= sync floor), after MoE
   1.4-1.7 ms - per-layer routing variance (4 +- 1.4 experts per side). Next: per-layer dynamic balance with experts
   held by both GPUs, cheaper syncs, MTP on the TP verify.
+
+## 2026-10-21 (later) TP2 per-token expert balance, multi-token TP2, n-gram speculation on two GPUs (engine bcc21bd57, 85166e33c)
+
+**Gains: short decode 58.1 -> 59.1 t/s (expert balance); code rewrite (copy-heavy, 600 tokens, greedy) single 32.6 ->
+TP2 43.9 -> TP2 + n-gram spec 50.6 t/s; story single 38.4 -> TP2 52.1 (spec 50.4).**
+
+- Expert balance: ownership map 0 / 1 / 2 (2 = on both GPUs: the hottest 25 % of the routing traffic, 566 experts,
+  pinned in the primary's cache); tp_split gives each shared selection to the side with fewer selections so far
+  (same rule on both GPUs). After-MoE waits: primary 2.78 -> 1.03 ms per token.
+- TP2 for 1-4 token steps (prompt tails, verify windows): R = nt everywhere, [nt][n_embd] partials, one program per
+  token count. Two bugs on the way: the attention partials were indexed with a hard 16 heads per token in
+  attn_merge (wrong for tokens >= 1 in the local 8-head mode) and the helper's mask mirror advanced on steps the
+  helper did not run. Mask rows now at a fixed stride (prm[30] = max_kv). Outputs identical to the single card.
+- N-gram speculation (--spec-type ngram-map-k, n 4 / m 3, 3 drafts; via restart.sh SARGS): acceptance 90 % on the
+  rewrite, 2.39 tokens per step, but a 4-token verify costs ~2x a 1-token step (routed experts scale with tokens:
+  32 selection rows, each decoded separately) -> +15 %. Novel text: -3 % (per-step recurrent snapshots).
+Where 80 t/s could come from: MTP drafts inside JDE (~1.5 ms per draft instead of 9 ms through the ggml graph):
+3 drafts at 0.78 / 0.57 / 0.44 acceptance -> ~2.8 tokens per ~38 ms step -> ~73 t/s; grouped expert decode in
+verify (each distinct expert decoded once per step) would add ~10 %.
