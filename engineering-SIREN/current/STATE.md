@@ -28,7 +28,7 @@ Targets (dev box AUX-1; see README for the table):
 ## Resume point (2026-10-21, two RX 580s)
 
 AUX-1: Vulkan1 = x16 card, Vulkan0 = chipset x4 card. Best dual mode: `JI_TP=2 scripts/serve.sh` (engine c4f8da270+):
-decode short 58.0, 100k 43.8, 245k 40.0 t/s (single 46.3 / 33.8 / 30.0); prefill = single (~348 t/s at 80k).
+decode short 58.8, 100k 45.2, 245k 41.1 t/s (single 46.3 / 33.8 / 30.0); prefill = single (~348 t/s at 80k).
 JI_TP=1 (MoE only) and JI_DUAL=32 (layer split) remain. kl.sh TP=2 / TP=1 / DUAL=S. Profiling: JI_TP_PROF=64.
 Next: attention kv-head split, TP2 state copy-back speed, prefill on two cards, MTP; vision (mmproj approved).
 

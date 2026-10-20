@@ -1373,3 +1373,26 @@ per token (~19 us per sync point); the rest of the waiting is per-segment imbala
 only) and the per-layer expert split.
 Next: attention kv-head split on the helper (removes the attention imbalance; at depth also halves attention),
 faster state out, then MTP / speculation on the cheaper verify.
+
+## 2026-10-21 (later) TP2 attention split, state-sync latency, partial state reads (engine 42fcac098..9e4073234)
+
+**Gains: JI_TP=2 short 57.7 -> 58.8, 100k 43.8 -> 45.2, 245k 40.0 -> 41.1 t/s; per-request TP2 state sync
+280 + 80 ms -> 38 + 45 ms; context-checkpoint restores no longer rebuild sparse page metadata (100-300 ms per
+request at long context, single card too).** Single card on the same build: 46.3 / 33.8 / 30.0.
+
+- Attention kv-head split: each GPU runs 8 query heads + 1 kv head in a "local mode" (n_head 8 / n_head_kv 1,
+  heads packed at 0) through the unchanged kernels (jde_attn_core extracted); the helper keeps a q8_0 mirror of
+  kv head 1 (1.36 GiB at 262k), its own page metadata, and a mask copy updated by the changed range. Cells written
+  outside TP steps are copied in (dirty range), head-1 cells written by TP steps go back with the state. Gain is
+  small: per-head attention at depth is latency-bound (256 chunk workgroups either way).
+- Hang found while adding it: the helper's recorded token programs took descriptor sets from the pool
+  jde_submit_wait resets; the metadata rebuild's dispatches overwrote them. Recorded programs now own a pool.
+- Partial state reads (LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, the server's context checkpoints - every request on
+  this hybrid model) keep the KV page metadata and the TP2 mirror (jde_state_partial).
+- State copies batched through both staging buffers; the helper staging buffer is host-cached (CPU reads from
+  write-combined memory were 240 ms of the 280).
+- Expert share: 0.5 balances short context (primary/helper work 11.5/11.3 ms) but depth wants 0.7 (the primary's
+  cache shrinks under the KV): 100k 42.3 vs 45.2, 245k 36.5 vs 41.1. Default 0.7.
+- JI_TP_PROF waits by sync type (frac 0.5, short): after mixer ~0.96 ms per GPU (= sync floor), after MoE
+  1.4-1.7 ms - per-layer routing variance (4 +- 1.4 experts per side). Next: per-layer dynamic balance with experts
+  held by both GPUs, cheaper syncs, MTP on the TP verify.
