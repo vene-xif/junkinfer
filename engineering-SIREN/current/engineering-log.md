@@ -1224,3 +1224,19 @@ renormalised). KL 99k / 130k: tau 0.02 0.00164 / 0.00077, 0.04 0.00696 / 0.00217
 0.00036 / 0.00033). Decode 2k 44.7 -> 44.7 / 45.1 / 45.7, 245k ~29.4 -> 29.2-29.8: no gain - all experts of a layer run
 in one parallel dispatch, the critical path is not the dropped low-weight expert. Report 5's "< 0.001 KL" does not
 hold here. Option kept (off).
+
+## 2026-10-20 MiniCPM-V 4.7 35B-A3B EXL3 3.74 bpw runs (mul1, mixed widths)
+
+**Gains: a second model family (Qwen3.6 fine-tune, mul1 codebook, 3-8 bit EXL3) served end to end: decode 34 t/s
+short (Qwen3.6 EXL3 4.0: 44), prefill 319 t/s at 20k; API suite 44/45.**
+
+Conversion (exl3_to_gguf.py, from the HDD copy): 1475 tensors, 16.27 GiB; types exl3_3 54, exl3_4 60, exl3_5 19,
+exl3_6 47, exl3_7 76, exl3_8 115 tensors; tokenizer 248,192 ids (67 MiniCPM special tokens, padding to the head).
+First greedy answers correct. Decode at 32k / 128k context: 34 t/s (GPU 28 ms/token: the 6-8 bit dense layers and the
+8-bit head cost more than Qwen3.6's 4/6-bit ones; the 8-bit head 3.9 ms vs 2.2).
+262k context: VRAM over-commit (dense weights 1.87 GB vs 1.3, KV 2.72 GB, compute buffer 2.66 GB at ubatch 4096) put
+weight memory outside VRAM (8-bit head 45 ms/token over PCIe) and left no expert cache; with the cache at zero JDE
+sent every miss to the CPU (0.33 t/s, scalar path). Fixes: minimal 8-slot cache keeps misses zero-copy on the GPU;
+JI_UBATCH=2048 halves the compute buffer (1.41 GB) -> 482-slot cache, 34 t/s at 262k context.
+API suite: chat_stream_thinking fails - for "Is 91 prime? yes/no" the model answers "No" inside the opened think
+block and stops (model behaviour; reasoning works on real questions).

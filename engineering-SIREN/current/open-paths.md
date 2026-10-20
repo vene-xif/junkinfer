@@ -29,7 +29,7 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 
 | # | Path | Status | Expected gain | Cost / risk |
 |---|---|---|---|---|
-| 10 | **mul1 codebook + EXL3 any width (2-8 bits)** | engine + shaders + converter written (types, x3_mv, mul_mm_gcn_exl3, dequant, JDE CPU path, codebook flag, tokenizer / vocab padding); numpy reference validated vs Qwen3.6 (cos 0.94-0.99) | runs MiniCPM-V 4.7 3.73 bpw (and any future mul1 / mixed-bit EXL3); smaller experts (3/4-bit) -> more cache hits, fewer PCIe bytes | build, GPU-vs-CPU-reference check, convert (HDD scratch), PPL / KL sanity, speed |
+| 10 | **mul1 + EXL3 any width** WORKING (engine f5ddada15 + fixes): MiniCPM-V 4.7 3.74 bpw converted (16.3 GiB), correct output, decode 34 t/s short (Qwen3.6 4.0: 44), prefill 319 t/s at 20k, API suite 44/45 (model answers trivial questions inside an unclosed think block). Needs JI_UBATCH=2048 at 262k. Open: KL/PPL reference for MiniCPM, mul1 decode cost (item 7), cache slots per width (item 11) | done (follow-ups open) | - | - |
 | 11 | Expert cache with byte-granular slots (mixed-width experts: 3/4/5-bit sizes differ by 1.7x; today slot = max size) | OPEN (after 10) | +20-40 % cache capacity on mixed-bit models | JDE slot allocator |
 | 12 | Clustered LM head (SV-Decode: h-space clusters, evaluate top 25 %, centroid fallback; exact for greedy via norm bound) | OPEN | head ~1.3 -> ~0.5 ms after item 5 (~+4 %) | offline clustering + two-stage shader |
 | 13 | Prefill MoE GEMM: two tile heights (BM 64 for full experts, 16 for the tails; tile fill 81 % -> 95 %) | OPEN (report 3) | MoE GEMM +15-30 % -> prefill +8-15 % | new GEMM variant + dispatcher |
