@@ -1208,3 +1208,11 @@ JI_SP_DENSE_LAYERS (attention layers kept dense on sparse decode steps):
 
 Three dense layers bring sparse decode to the harness floor (dense 0.00007) but every token re-reads those layers'
 whole KV: -13 % at 245k. Default stays sparse; documented as the max-quality setting in serve.sh.
+
+## 2026-10-20 LM head as IQ4_NL: rejected
+
+`tools/swap_head.py` (copy of a GGUF with output.weight from another GGUF) + the BF16 head of the MTP sidecar
+quantized by llama-quantize (IQ4_NL 273 MB, Q5_K 333 MB; EXL3 6-bit head 381 MB): IQ4_NL head decode 2k 44.6 -> 47.3
+t/s, 245k ~29.5 -> ~30.8, but KL 0.00033 -> 0.0044 (130k row), 0.00036 -> 0.0026 (99k), top-1 0.997 -> 0.976 - ten
+times the sparse-attention KL for +4-6 %. The trellis 6-bit head is far better per byte; a cheaper head needs an EXL3
+re-quantization (~4 bpw).
