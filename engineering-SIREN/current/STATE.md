@@ -24,6 +24,16 @@ Targets (dev box AUX-1; see README for the table):
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
+## Resume point (2026-10-20, second RX 580 arrived)
+
+AUX-1 shut down for the second-card install. State: engine dbdc79f9b+ (78b67811a JI_SP_LBUDGET, c23fee6ec minimal
+cache), junkinfer docs current; grub has iommu=pt + amdgpu.lockup_timeout; restart.sh drops page caches. Models on
+the SSD: Qwen3.6 EXL3 4.0 (default), MiniCPM-V 4.7 EXL3 GGUF; MiniCPM safetensors, old IQ4_NL GGUF and the
+opt-native ROCm tree in ~/models/ssd-overflow (HDD). Vision: Qwen3.6 mmproj not yet downloaded (ggml-org
+Qwen3.6-35B-A3B-GGUF mmproj Q8_0; the SSD's mmproj-Q8_0.gguf is MiniCPM-V's tower).
+Next: dual-card bring-up per dual-card-design.md (lspci link of slot 2, per-card bandwidth, RADV device order,
+both cards' DPM udev rule), then prefill layer split, decode expert-server.
+
 ## Open optimization paths
 
 Full ordered list (effort tiers, status, expected gains, rejected items): `open-paths.md`.
