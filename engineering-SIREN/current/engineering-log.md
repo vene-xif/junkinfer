@@ -1313,3 +1313,35 @@ Next for dual: prefill pipelining across the cards (~1.3x ceiling with card 2 re
 Prefill from scratch (fresh JR_STATE_DIR, L_code r1 130k): KL 0.00059 single = 0.00059 dual32 ub4096 (identical
 p99/max/top1) - the dual prefill is exact too. Open question (not dual): the saved prefix state used by kl.sh gives
 0.00033; find which prefill config produced it (dense tail / raw basis / budget) before trusting either number.
+
+## 2026-10-20 (later) Cross-GPU sync on gfx8 + tensor-parallel MoE (JI_TP, engine efad9ea7e)
+
+**Gains (JI_TP=1 vs single card, same build, 262k ctx): decode short 46.9 -> 49.9 (+6 %), 100k 33.8 -> 41.0 (+21 %),
+245k 30.0 -> 37.9 t/s (+26 %); prefill unchanged.** Better than the layer split (JI_DUAL=32: 49.8 / 36.3 / 33.0).
+
+Sync primitives measured (lab/xsync: xsync.cpp, diag.cpp, evq.cpp, chain.cpp):
+- Shader polling of host memory (imported or host-visible, coherent/volatile/atomics/memory model) never sees an
+  external write while the dispatch runs; GPU writes become visible at dispatch end. Atomics on system memory over
+  the chipset slot deadlock (no PCIe AtomicOps). Fine-grained GPU spin sync is out.
+- Submit + fence round trip ~100 us per device (73 us of it CPU-side vkQueueSubmit): 80 syncs per token would
+  cost 14 ms. JDE's single submit per token is right.
+- CP waits on host-set VkEvents + VK_AMD_buffer_marker flags + a CPU relay thread, everything pre-submitted:
+  **13.6 us per two-GPU sync step**, 23.6 us with an 8 KB exchange spread over workgroups. Only on graphics
+  queues: on compute queues the CP never sees vkSetEvent (hang, GPU reset; once the x16 card's reset failed and
+  the box rebooted). Data exchange: one pinned host allocation imported into both devices, visible across
+  dispatch boundaries; each writer owns its cache lines (a shared line gave stale reads).
+- Dispatch + barrier chain: ~2.5 us per step (barriers are not the decode bottleneck; the EXL3 trellis ALU is,
+  ~200 G weights/s for ~3 G weights per token).
+
+JI_TP design: model single-card on the x16 GPU; a helper engine (own VkDevice + graphics queue on the x4 GPU)
+holds a static hot-expert set (routing counts ref/tp/tp_hot_qwen36_exl3.bin from 6 prompts x 400 tokens: top
+20 % of experts = 55 % of routing, top 49 % = 86 %). Per layer: tp_split moves the helper's selections (+ x) to the
+exchange area, marker -> relay -> helper event; helper: its experts + weighted sum -> exchange, marker -> relay ->
+primary event before the combine (moe_host slot). Primary TP tokens run on ggml's graphics-family queue.
+Short-context share sweep (JI_TP_FRAC 0.3-1.0): all ~50 t/s - the helper's MoE chain has ~50 us fixed latency
+per layer, so moving work shifts the stall (JI_TP_PROF: primary stalled 0.6-2.6 ms/token). At depth the
+primary's expert cache shrinks (KV takes VRAM) and misses dominate the MoE (single-card 245k profile: MoE
+mat-vecs 11.3 of 32.4 ms, attention 5.6, dense ~10, head 2.2): the full helper wins there.
+KL L_code r1 (130k, 1-token steps): single 0.00036, TP 0.00035 (summation order differs, not bit-exact).
+Next on two GPUs: the helper is idle ~15 ms of every token - attention KV-head split at depth (helper owns kv head
+1 + a head-1 KV mirror; 2 syncs per attention layer), dense head split (GDN state mirror), prefill pipelining.

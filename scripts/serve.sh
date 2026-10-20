@@ -50,6 +50,16 @@ if [ -n "${JI_DUAL:-}" ]; then
   JI_GPU=all
   export GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
   EXPERT_ARGS=(-dev Vulkan1,Vulkan0 -ts "$JI_DUAL,$((41 - JI_DUAL))" --n-cpu-moe "$JI_DUAL")
+elif [ "${JI_TP:-0}" != 0 ]; then
+  # JI_TP=1 (dual card, tensor-parallel MoE): the model runs on the x16 card as in single-card mode; JDE puts a
+  # static set of hot experts on the x4 card, which computes them concurrently (JI_TP_HOT = routing counts file,
+  # JI_TP_FRAC = share of the routing traffic it takes, JI_TP_SLOTS = cap)
+  # Measured (2026-10-20, helper full = 49 % of experts): decode short 46.9 -> 49.9, 100k 33.8 -> 41.0, 245k 30.0 -> 37.9
+  # t/s; prefill = single card (the helper only decodes).
+  JI_GPU=all
+  export JI_TP GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
+  export JI_TP_HOT=${JI_TP_HOT:-$(cd "$(dirname "$0")/.." && pwd)/ref/tp/tp_hot_qwen36_exl3.bin}
+  EXPERT_ARGS=(-dev Vulkan1 --cpu-moe)
 fi
 [ "$JI_GPU" != all ] && export GGML_VK_VISIBLE_DEVICES=$JI_GPU
 

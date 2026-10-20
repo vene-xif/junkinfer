@@ -1,0 +1,5 @@
+#version 450
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer S { uint v[]; } s;
+layout(push_constant) uniform P { uint i, n; } p;
+void main() { if (gl_GlobalInvocationID.x < p.n) s.v[gl_GlobalInvocationID.x] += p.i; }

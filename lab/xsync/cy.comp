@@ -1,0 +1,22 @@
+#version 450
+// one TP sync step: device r checks the other device's slot holds step-1 (written in the previous submission) and its
+// payload, then writes step into its own slot + payload. Slots live in one pinned host allocation imported by both.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer S { uint flag[64]; uint data[]; } s;
+layout(push_constant) uniform P { uint role, step, np, mode; } p;
+void main() {
+    const uint lid = gl_LocalInvocationID.x, other = 1u - p.role;
+    if (p.step > 1u) {
+        if (gl_GlobalInvocationID.x == 0u) {
+            const uint at = (p.mode & 1u) != 0u ? 56u + other : other * 16u;
+            const uint v = s.flag[at];
+            if (v < p.step - 1u) s.flag[40u + p.role] += 1u;        // behind = stale
+            else if (v > p.step - 1u) s.flag[50u + p.role] += 1u;   // ahead = the other device already ran on
+        }
+        for (uint k = gl_GlobalInvocationID.x; k < p.np; k += 64u * gl_NumWorkGroups.x) if (s.data[other * 65536u + k] != (p.step - 1u) * 31u + k) s.flag[44u + p.role] = 1u;
+    }
+    barrier();
+    for (uint k = gl_GlobalInvocationID.x; k < p.np; k += 64u * gl_NumWorkGroups.x) s.data[p.role * 65536u + k] = p.step * 31u + k;
+    barrier();
+    if (gl_GlobalInvocationID.x == 0u) s.flag[p.role * 16u] = p.step;
+}

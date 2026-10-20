@@ -1,0 +1,15 @@
+#version 450
+// diag: mode 0 = GPU writes flag[0] = 1..iters as fast as it can (write visibility, CPU samples);
+//       mode 1 = GPU counts its polls of flag[16] until it reads iters (CPU writes it), stores the poll count.
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) coherent volatile buffer S { uint flag[64]; uint data[]; } s;
+layout(push_constant) uniform P { uint role, iters, np, spin_max; } p;
+void main() {
+    if (p.role == 0u) {
+        for (uint i = 1; i <= p.iters; ++i) { s.flag[0] = i; memoryBarrier(); }
+    } else {
+        uint n = 0;
+        while (s.flag[16] != p.iters && ++n < p.spin_max) {}
+        s.flag[1] = n;
+    }
+}

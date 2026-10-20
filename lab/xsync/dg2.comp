@@ -1,0 +1,16 @@
+#version 450
+#pragma use_vulkan_memory_model
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_nontemporal_keyword : require
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer S { nontemporal coherent volatile uint flag[64]; uint data[]; } s;
+layout(push_constant) uniform P { uint role, iters, np, spin_max; } p;
+void main() {
+    if (p.role == 0u) {
+        for (uint i = 1; i <= p.iters; ++i) { atomicStore(s.flag[0], i, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelease | gl_SemanticsMakeAvailable); }
+    } else {
+        uint n = 0;
+        while (atomicLoad(s.flag[16], gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsAcquire | gl_SemanticsMakeVisible) != p.iters && ++n < p.spin_max) {}
+        s.flag[1] = n;
+    }
+}

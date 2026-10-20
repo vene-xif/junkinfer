@@ -25,14 +25,14 @@ Targets (dev box AUX-1; see README for the table):
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
-## Resume point (2026-10-20, two RX 580s)
+## Resume point (2026-10-20 evening, two RX 580s)
 
-AUX-1 has two cards: Vulkan1 = slot 1 (PCIe 3.0 x16), Vulkan0 = chipset slot (PCIe 2.0 x4, 1.27 GB/s). Single-card
-mode is pinned to Vulkan1 (serve.sh JI_GPU=1). Dual: `JI_DUAL=32 scripts/serve.sh` (JDE stage per card, engine
-c16539623): decode short 49.8, 100k 36.3, 245k 33.0 t/s (single 48.5 / 33.8 / 30.0); prefill = single (349 t/s at 80k).
-KL identical to single. kl.sh takes DUAL=S UB=N. Watch card0 GTT use (over-commit = weights at x4 speed).
-Next: dual prefill pipelining (double-buffered expert staging), decode expert-server on card 2, MTP on two cards;
-vision (Qwen3.6 mmproj download approved, HyperQwen #36 host-resident tower).
+AUX-1: Vulkan1 = x16 card, Vulkan0 = chipset x4 card (1.27 GB/s). Best dual mode: `JI_TP=1 scripts/serve.sh`
+(engine efad9ea7e): decode short 49.9, 100k 41.0, 245k 37.9 t/s (single 46.9 / 33.8 / 30.0); prefill = single
+(~348 t/s at 80k). Layer split JI_DUAL=32 still available (49.8 / 36.3 / 33.0). kl.sh takes TP=1 or DUAL=S UB=N.
+Cross-GPU sync facts and probes: engineering log 2026-10-20 (later), lab/xsync.
+Next: attention kv-head split on the TP helper, dense head split, prefill pipelining, MTP; vision (Qwen3.6 mmproj
+download approved, HyperQwen #36).
 
 ## Open optimization paths
 

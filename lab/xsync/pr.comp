@@ -1,0 +1,26 @@
+#version 450
+// relay variant: each device polls / posts in its OWN uncached host memory; a CPU thread relays between devices.
+// A posts round i at post[0] (payload first), waits for echo[16] == i. B waits for post[0] == i, checks payload, echoes.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) coherent volatile buffer S { uint flag[64]; uint data[]; } s;
+layout(push_constant) uniform P { uint role, iters, np, spin_max; } p;
+void main() {
+    const uint lid = gl_LocalInvocationID.x;
+    uint bad = 0;
+    for (uint i = 1; i <= p.iters; ++i) {
+        if (p.role == 0u) {
+            for (uint k = lid; k < p.np; k += 64u) s.data[k] = i * 7919u + k;
+            memoryBarrier(); barrier();
+            if (lid == 0u) s.flag[0] = i;
+            if (lid == 0u) { uint n = 0; while (s.flag[16] != i && ++n < p.spin_max) {} if (n >= p.spin_max) bad++; }
+            barrier();
+        } else {
+            if (lid == 0u) { uint n = 0; while (s.flag[0] != i && ++n < p.spin_max) {} if (n >= p.spin_max) bad++; }
+            barrier(); memoryBarrier();
+            for (uint k = lid; k < p.np; k += 64u) if (s.data[k] != i * 7919u + k) s.flag[48] = 1u;
+            barrier();
+            if (lid == 0u) s.flag[16] = i;
+        }
+    }
+    if (lid == 0u) s.flag[32 + p.role] = bad + 1000000u;   // done marker
+}
