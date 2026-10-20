@@ -21,7 +21,12 @@ Targets (dev box AUX-1; see README for the table):
   set, round trips, loops, tool_choice none/required/named), JSON / JSON schema, prompt caching across turns and tool
   loops, Completions, Responses, Anthropic Messages (tools, tool_choice, thinking, streaming, Claude-Code-style),
   disconnects, queued requests, long-output coherence; `--long`: 117k-token needle via the API (sparse attention).
-- Speed: decode ~45 t/s short, ~34 at 100k, ~31 at 245k; prefill ~450 t/s (7k), 264 (80k), 212 (117k).
+- Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
+  (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
+
+## Open optimization paths
+
+Full ordered list (effort tiers, status, expected gains, rejected items): `open-paths.md`.
 
 ## Earlier status (2026-10-16)
 

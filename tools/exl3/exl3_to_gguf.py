@@ -7,8 +7,12 @@ exllamav3's [K/16][N/16] to [N/16][K/16] so a group of 16 outputs is contiguous)
 Other tensors get llama.cpp's qwen35 conversion transforms (A_log -> -exp, RMSNorm +1, conv1d squeeze) and the
 GDN value heads are reordered grouped -> tiled like convert_hf_to_gguf.py does; on EXL3 tensors whole 128-wide
 heads are moved (tile groups + scale vectors), which commutes with the blockwise Hadamard.
-Metadata (hparams, tokenizer, template) is copied from an existing qwen35moe GGUF of the same model; the MTP
-layer is dropped.
+Metadata (hparams, tokenizer, template) is copied from an existing qwen35moe GGUF of the same architecture; the MTP
+layer is dropped. Fine-tunes with their own tokenizer.json (same BPE, e.g. MiniCPM-V 4.7: Qwen3.6's vocabulary plus
+special tokens in its padding slots) get the token list / types re-derived from it, truncated to the embedding rows,
+and their chat template. Codebook: mcg or mul1 (per tensor; must be uniform) -> junkinfer.exl3.codebook 0 / 1.
+Any width 2..8 bits per weight (GGML_TYPE_EXL3_<bits>). n_vocab = the head's rows (a multiple of 128: its output
+Hadamard blocks need every row); a shorter embedding gets zero rows and the extra ids stay [PAD] tokens.
 
 usage: exl3_to_gguf.py EXL3_DIR META_GGUF OUT_GGUF
 """
@@ -20,6 +24,7 @@ import gguf  # noqa: E402
 
 MCG = 0xCBAC1FED
 HB = 128   # Hadamard block
+CODEBOOK = {"mcg": 0, "mul1": 1}
 
 
 class ST:
@@ -73,6 +78,10 @@ def main():
     vperm = block_perm(nk, nv // nk)          # in units of value heads (= Hadamard blocks)
     full_int = tc.get("full_attention_interval", 4)
     P = "model.language_model."
+    P_EMB = P + "embed_tokens.weight"
+    cbs = {k.rsplit(".", 1)[1] for k in st.hdr if k.endswith((".mcg", ".mul1"))}
+    assert len(cbs) == 1, f"mixed codebooks {cbs}"
+    cb = cbs.pop()
 
     rd = gguf.GGUFReader(meta_path)
     arch = rd.fields["general.architecture"].contents()
@@ -80,15 +89,44 @@ def main():
     w = gguf.GGUFWriter(out_path, arch)
     skip = {"GGUF.version", "GGUF.tensor_count", "GGUF.kv_count", "general.architecture",
             f"{arch}.nextn_predict_layers", "general.file_type"}
+    n_emb = st.hdr[P_EMB][2]["shape"][0]
+    n_vocab = max(n_emb, st.hdr["lm_head.trellis"][2]["shape"][1] * 16)   # lm_head trellis [K/16, N/16, 16 bits]
+    assert len(rd.fields["tokenizer.ggml.tokens"].data) >= n_vocab, "meta GGUF has fewer tokens than the head"
+    over = {}   # tokenizer fields re-derived from the checkpoint's own tokenizer.json
+    tj_path = os.path.join(src, "tokenizer.json")
+    if os.path.exists(tj_path):
+        tj = json.load(open(tj_path))
+        ids = dict(tj["model"]["vocab"])
+        special = {}
+        for a in tj.get("added_tokens", []):
+            ids[a["content"]] = a["id"]
+            special[a["id"]] = a.get("special", False)
+        inv = {v: k for k, v in ids.items()}
+        toks = rd.fields["tokenizer.ggml.tokens"].contents()[:n_vocab]
+        types = rd.fields["tokenizer.ggml.token_type"].contents()[:n_vocab]
+        changed = 0
+        for i in range(n_vocab):
+            t = inv.get(i)
+            if t is not None and t != toks[i]:
+                toks[i] = t
+                types[i] = 3 if special.get(i, False) else 4   # CONTROL / USER_DEFINED
+                changed += 1
+        over["tokenizer.ggml.tokens"] = toks
+        over["tokenizer.ggml.token_type"] = types
+        print(f"tokenizer: {n_vocab} tokens, {changed} re-derived from {tj_path}")
+    ct = os.path.join(src, "chat_template.jinja")
+    if os.path.exists(ct):
+        over["tokenizer.chat_template"] = open(ct).read()
     for f in rd.fields.values():
         if f.name in skip or f.name.startswith("quantize."):
             continue
         vt = f.types[0]
         sub = f.types[-1] if vt == gguf.GGUFValueType.ARRAY else None
-        w.add_key_value(f.name, f.contents(), vt, sub_type=sub)
+        w.add_key_value(f.name, over.get(f.name, f.contents()), vt, sub_type=sub)
     w.add_key_value(f"{arch}.block_count", n_layer, gguf.GGUFValueType.UINT32)
     w.add_key_value("junkinfer.exl3.version", 1, gguf.GGUFValueType.UINT32)
     w.add_key_value("junkinfer.exl3.mcg", MCG, gguf.GGUFValueType.UINT32)
+    w.add_key_value("junkinfer.exl3.codebook", CODEBOOK[cb], gguf.GGUFValueType.UINT32)
     w.add_key_value("junkinfer.exl3.source", os.path.basename(os.path.normpath(src)), gguf.GGUFValueType.STRING)
 
     plan = []   # (name, np_shape, dtype for info, nbytes, raw_dtype, producer)
@@ -107,8 +145,11 @@ def main():
 
     def exl3_parts(prefix):
         tr, _ = st.get(prefix + ".trellis")
-        mcg = int(np.asarray(st.get(prefix + ".mcg")[0]).astype(np.int64).reshape(-1)[0]) & 0xFFFFFFFF
-        assert mcg == MCG, f"{prefix}: mcg {mcg:#x}"
+        if cb == "mcg":
+            mcg = int(np.asarray(st.get(prefix + ".mcg")[0]).astype(np.int64).reshape(-1)[0]) & 0xFFFFFFFF
+            assert mcg == MCG, f"{prefix}: mcg {mcg:#x}"
+        else:
+            assert st.has(prefix + ".mul1"), prefix
         return tr
 
     def exl3_one(prefix, nperm=None, kperm=None):
@@ -124,17 +165,21 @@ def main():
             suh = suh[(kperm[:, None] * HB + np.arange(HB)).reshape(-1)]
         return np.ascontiguousarray(np.transpose(tr, (1, 0, 2))), suh, svh
 
-    def add_exl3(gname, prefix, nperm=None, kperm=None):
+    def add_exl3(gname, prefix, nperm=None, kperm=None, n_keep=None):
         tr = exl3_parts(prefix)
         kt, nt, w16 = tr.shape
+        if n_keep is not None:   # the head: padded rows past the vocabulary are dropped (whole 16-row tiles)
+            assert n_keep % 16 == 0 and n_keep <= nt * 16, (prefix, n_keep, nt)
+            nt = n_keep // 16
         bits = w16 // 16
         K, N = kt * 16, nt * 16
-        qt = {4: gguf.GGMLQuantizationType.EXL3_4, 6: gguf.GGMLQuantizationType.EXL3_6}[bits]
+        qt = getattr(gguf.GGMLQuantizationType, f"EXL3_{bits}")
         cache = {}
 
         def get():
             if not cache:
-                cache["v"] = exl3_one(prefix, nperm, kperm)
+                t, su, sv = exl3_one(prefix, nperm, kperm)
+                cache["v"] = (np.ascontiguousarray(t[:nt]), su, sv[:nt * 16]) if n_keep is not None else (t, su, sv)
             return cache["v"]
 
         def pop(i):
@@ -153,7 +198,7 @@ def main():
         kt, nt, w16 = tr.shape
         bits = w16 // 16
         K, N = kt * 16, nt * 16
-        qt = {4: gguf.GGMLQuantizationType.EXL3_4, 6: gguf.GGMLQuantizationType.EXL3_6}[bits]
+        qt = getattr(gguf.GGMLQuantizationType, f"EXL3_{bits}")
         nb = n_expert * N * K * bits // 8
 
         def tiles():
@@ -168,10 +213,16 @@ def main():
         add_f16(gname + ".suh", lambda: np.stack([st.get(p + ".suh")[0] for p in pre]), [n_expert, K])
         add_f16(gname + ".svh", lambda: np.stack([st.get(p + ".svh")[0] for p in pre]), [n_expert, N])
 
-    # embeddings stay bf16
+    # embeddings stay bf16 (zero rows up to n_vocab)
     emb, kind = st.get(P + "embed_tokens.weight")
     assert kind == "bf16"
-    plan.append(("token_embd.weight", list(emb.shape), np.uint16, emb.nbytes, gguf.GGMLQuantizationType.BF16, lambda: np.ascontiguousarray(emb)))
+    eshape = [n_vocab, emb.shape[1]]
+    def emb_full():
+        if emb.shape[0] == n_vocab:
+            return np.ascontiguousarray(emb)
+        out = np.zeros(eshape, dtype=emb.dtype); out[:emb.shape[0]] = emb
+        return out
+    plan.append(("token_embd.weight", eshape, np.uint16, n_vocab * emb.shape[1] * 2, gguf.GGMLQuantizationType.BF16, emb_full))
 
     for il in range(n_layer):
         L = f"{P}layers.{il}."

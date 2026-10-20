@@ -1135,3 +1135,56 @@ writes the pre-H_256 query (qr) for attn_score. JI_SP_RAW=1 and JI_SP_BG=2 (vari
 
 Rejected on the way: JI_SP_ROT (log I0 for RoPE pairs - computed on the wrong dims before the rotation was found),
 JI_SP_NORM=2 (gate-weighted ranking: -3 % KL for -4 % speed), JI_SP_BG=3 (dipole: -7 %), budget 24576 / 32768.
+
+## 2026-10-20 Raw-basis statistics for the sparse PREFILL: rejected (speed)
+
+ji_fa2_pmeta un-rotating its sub-pages + ji_fa2_sparse un-rotating the queries (FWHT by subgroup shuffles, f16 in LDS
+aliased over the K/V staging): prefill KL at 130k (dense tail 4096) 0.00035 -> 0.00026, without the tail no gain
+(0.00139). But the server prefill at 132k fell 305.7 -> 259.5 t/s (raw on) and to 281 t/s even with the feature
+off - the extra code changed the dense core's code generation. Reverted; patch kept in scratchpad rawpf_patch/.
+Combined default KL at 130k (both sparse, raw decode statistics, dense prompt tail): 0.00045. API suite 46/46.
+
+## 2026-10-20 Prompt-tail variants, reports 3-5 (kernels / system / weights), system knobs, mul1 groundwork
+
+**Gains (measured, not yet committed): per-layer exact prompt tail (layers 3, 7, 11) - prefill 132k 305.5 -> 318.9
+t/s at prefill KL 0.00035 -> 0.00038 (none: 324.3 t/s, 0.00123). Decode unchanged.**
+
+Prompt-tail variants (L_code r1 130k, dense decode; server prefill 132k):
+
+| tail mode | prefill KL | prefill t/s |
+|---|---|---|
+| none | 0.00123 | 324.3 |
+| semi-dense, 16k / 32k / 48k key budget + 16k local (JI_SPF_TAIL_BUDGET) | 0.00104 / 0.00072 / 0.00073 | 321.2 / 317.8 / 315.2 |
+| exact in layers 7,11 / 3,7,11 / 7,11,15,19 (JI_SPF_TAIL_LAYERS) | 0.00045 / 0.00038 / 0.00043 | 320.8 / 318.9 / - |
+| exact in all layers (committed default) | 0.00035 | 305.5 |
+
+Default becomes JI_SPF_TAIL_LAYERS=3,7,11 (qwen35moe's first three attention layers; "all" restores the old mode).
+The FA op carries its layer in op_params[13]. Raw-basis prefill statistics: KL 0.00035 -> 0.00026 but prefill
+305.7 -> 259.5 t/s, and 281 t/s even with the feature off (code generation of the dense core changed): reverted,
+patch kept.
+
+System knobs (report 4; decode t/s 2k / 245k, runs 2-3): baseline 43.7 / 24.5-26.9; PCIe MaxReadReq 512 -> 4096:
+43.8 / 24.1-26.6; + THP always: 43.6-44.7 / 23.8-26.4; CPU share of misses JI_X3_ZC 7 / 6 / 5: 43.4-43.7 /
+24.3-26.9, 41.7-43.3, 41.8-43.9: no gain. Note the 245k baseline is below the 29.55 t/s of 2026-10-19 (open:
+open-paths.md item 1). OverDrive already unlocked; IOMMU on (iommu=pt pending a reboot).
+
+Report 3 (kernels, https://share.gemini.google/nAyRlhgbuKUE, Polish): taken - per-layer budgets, MoE two-height GEMM
+tiles, XOR swizzle (profile first), 4-bit head; already tried / contradicted - u24 multiply, codebook LUT, PV skip,
+dense last-128 queries (our knee is 4096), FA2 head split.
+Report 4 (system, https://share.gemini.google/GixB1puPueeG): most items already in place (nogttspill, replayed
+command buffers, all experts of a layer in one dispatch with hits and zero-copy misses together); measured above.
+Report 5 (weights, https://share.gemini.google/uV2NHl77U4Gg): runtime levers taken (non-EXL3 LM head, dynamic top-k by
+gate threshold, clustered head later); re-quantization items deferred (no quantization GPU); SVD / big pruning rejected.
+
+mul1 / any-width EXL3 groundwork (for MiniCPM-V 4.7 35B-A3B EXL3 3.74 bpw, a Qwen3.6 fine-tune: config
+qwen3_5_moe_text, codebook mul1, experts 3/4/5 bits, projections 5-8, head 8 bits; tokenizer = Qwen3.6's plus 67
+special tokens in its padding slots, vocab 248,144, head 248,192 rows):
+- numpy reference (tools/exl3/exl3_ref.py) decodes mul1 and any width; decoded MiniCPM weights vs Qwen3.6 IQ4_NL:
+  cosine 0.988 (shexp down, 6-8 bit), 0.978 (gate 4-bit), 0.971-0.975 (up 3-bit), 0.939 (down 5-bit).
+- engine (uncommitted): GGML_TYPE_EXL3_2/3/5/7/8, ggml_exl3_bits(); x3_mv / mul_mm_gcn_exl3 / dequant_exl3 generic
+  in BITS (odd widths load uvec2) with the codebook as a specialisation constant; per-width pipelines; JDE CPU
+  scalar path generic; GGUF key junkinfer.exl3.codebook.
+- converter: codebook detection, any width, tokenizer re-derived from the checkpoint's tokenizer.json, its chat
+  template, vocabulary padded to the head's rows (the head's output Hadamard needs whole 128-row blocks).
+- On gfx803 mul1 is not cheaper than mcg as plain GLSL (byte sum by shifts); a v_sad_u8 lowering would make it ~20 %
+  cheaper per weight. Speed upside of MiniCPM comes from smaller experts (cache capacity, PCIe bytes).

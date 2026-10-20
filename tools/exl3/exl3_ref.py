@@ -38,6 +38,17 @@ def mcg_decode(w16, mult):
     hi = (x >> np.uint32(16)).astype(np.uint16).view(np.float16).astype(np.float32)
     return (lo + hi).astype(np.float16).astype(np.float32)   # the kernels add in fp16
 
+MUL1 = 0x83DCD12D
+
+def mul1_decode(w16):
+    """exllamav3 codebook "mul1" (cb 2): x = idx * 0x83DCD12D; s = 0x6400 + byte sum of x (an fp16 integer 1024..2044);
+    value = fp16 fma(s, 0x1eee, 0xc931) - exact in float64, then one rounding to fp16"""
+    x = ((w16.astype(np.uint64) * np.uint64(MUL1)) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
+    bs = (x & 0xFF) + ((x >> 8) & 0xFF) + ((x >> 16) & 0xFF) + (x >> 24)
+    s = (np.uint32(0x6400) + bs).astype(np.uint16).view(np.float16).astype(np.float64)
+    k = np.array([0x1eee, 0xc931], dtype=np.uint16).view(np.float16).astype(np.float64)
+    return (s * k[0] + k[1]).astype(np.float16).astype(np.float32)
+
 def tile_pos_map():
     """position p (0..255) in the trellis -> (row, col) in the 16x16 tile (tensor-core fragment shuffle)"""
     rc = np.zeros((256, 2), dtype=np.int64)
@@ -66,7 +77,7 @@ def decode_inner(trellis, mult):
     idx = (start[:, None] + np.arange(16)[None, :]) % L                                      # [256, 16]
     weights = (1 << (15 - np.arange(16))).astype(np.uint32)
     win = (bitarr[..., idx].astype(np.uint32) * weights).sum(-1).astype(np.uint32)           # [kt, nt, 256]
-    vals = mcg_decode(win, mult)
+    vals = mul1_decode(win) if mult == "mul1" else mcg_decode(win, mult)
     rc = tile_pos_map()
     W = np.zeros((kt, 16, nt, 16), dtype=np.float32)
     W[:, rc[:, 0], :, rc[:, 1]] = np.moveaxis(vals, 2, 0)                                    # [256, kt, nt] -> place
@@ -83,7 +94,7 @@ def full_weight(model_dir, prefix):
     tr = st_read(model_dir, idx, prefix + ".trellis")
     suh = st_read(model_dir, idx, prefix + ".suh").astype(np.float32)
     svh = st_read(model_dir, idx, prefix + ".svh").astype(np.float32)
-    mcg = int(st_read(model_dir, idx, prefix + ".mcg").astype(np.uint32).reshape(-1)[0])
+    mcg = int(st_read(model_dir, idx, prefix + ".mcg").astype(np.uint32).reshape(-1)[0]) if prefix + ".mcg" in idx else "mul1"
     Wi = decode_inner(tr, mcg)
     H = sylvester(128) / np.sqrt(128)
     K, N = Wi.shape
@@ -96,7 +107,7 @@ def full_weight(model_dir, prefix):
 if __name__ == "__main__":
     model_dir, prefix = sys.argv[1], sys.argv[2]
     W, mcg = full_weight(model_dir, prefix)
-    print(f"{prefix}: W {W.shape}, mcg {mcg:#x}, rms {np.sqrt((W**2).mean()):.5f}")
+    print(f"{prefix}: W {W.shape}, codebook {mcg if isinstance(mcg, str) else hex(mcg)}, rms {np.sqrt((W**2).mean()):.5f}")
     if len(sys.argv) > 4:
         sys.path.insert(0, os.path.expanduser("~/junkinfer/engine/gguf-py"))
         import gguf
