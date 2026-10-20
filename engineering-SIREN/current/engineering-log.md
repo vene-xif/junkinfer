@@ -1240,3 +1240,21 @@ sent every miss to the CPU (0.33 t/s, scalar path). Fixes: minimal 8-slot cache 
 JI_UBATCH=2048 halves the compute buffer (1.41 GB) -> 482-slot cache, 34 t/s at 262k context.
 API suite: chat_stream_thinking fails - for "Is 91 prime? yes/no" the model answers "No" inside the opened think
 block and stops (model behaviour; reasoning works on real questions).
+
+## 2026-10-20 Per-layer decode budgets (JI_SP_LBUDGET)
+
+Late attention layers (15..39, sharp attention in the dump analysis) with a smaller page budget:
+
+| config | 100k t/s | 245k t/s | decode KL 99k / 130k / 245k |
+|---|---|---|---|
+| default (16384 everywhere) | 34.5 | 29.9 | 0.00036 / 0.00033 / 0.00029 |
+| late layers 8192 | 35.5 | 30.4 | 0.00026 / 0.00041 / 0.00033 |
+| dense 3,7,11 | 32.4 | 26.0 | 0.00004 / 0.00006 / 0.00004 |
+| dense 3,7,11 + late 8192 | 33.8 | 26.2 | - / 0.00020 / 0.00020 |
+| dense 3,7,11 + late 4096 | - | - | 0.00106 / 0.00349 / 0.00200 |
+
+Selected-page attention is not where decode time goes: halving the late budget gives +2-3 % at unchanged mean KL
+(within noise), and does not pay for dense early layers. Late 8192 is a default candidate pending the 64k row.
+Profile (short context, JI_PROFILE_GPU, serialised): the dense EXL3 mat-vecs are ~8-10 ms of ~22 ms/token
+(8192x2048 84 us vs a 42 us memory floor; codebook-bound per the 2026-10-19 probes) - the main short-context lever.
+Next: dense projections in a bandwidth-bound mainline format (hybrid GGUF, tools/swap_tensors.py).

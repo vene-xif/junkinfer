@@ -29,13 +29,18 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 
 | # | Path | Status | Expected gain | Cost / risk |
 |---|---|---|---|---|
+| 10b | **Dense (non-expert) projections in a bandwidth-bound format** (Q8_0 / Q6_K / Q5_K / IQ4_NL via JDE's mv kernels) instead of codebook-bound EXL3: dense mat-vecs are ~8-10 ms of ~22 ms/token at ~1.9x their memory floor | IN PROGRESS: hybrid GGUF with the dense tensors of the old mainline Qwen3.6 GGUF (tools/swap_tensors.py) | up to ~-4 ms/token short context (44 -> ~50 t/s); VRAM +/-; KL vs EXL3 dense to measure | BF16 source for better recipes (HTTP range fetch of the dense tensors) |
+
+
+| # | Path | Status | Expected gain | Cost / risk |
+|---|---|---|---|---|
 | 10 | **mul1 + EXL3 any width** WORKING (engine f5ddada15 + fixes): MiniCPM-V 4.7 3.74 bpw converted (16.3 GiB), correct output, decode 34 t/s short (Qwen3.6 4.0: 44), prefill 319 t/s at 20k, API suite 44/45 (model answers trivial questions inside an unclosed think block). Needs JI_UBATCH=2048 at 262k. Open: KL/PPL reference for MiniCPM, mul1 decode cost (item 7), cache slots per width (item 11) | done (follow-ups open) | - | - |
 | 11 | Expert cache with byte-granular slots (mixed-width experts: 3/4/5-bit sizes differ by 1.7x; today slot = max size) | OPEN (after 10) | +20-40 % cache capacity on mixed-bit models | JDE slot allocator |
 | 12 | Clustered LM head (SV-Decode: h-space clusters, evaluate top 25 %, centroid fallback; exact for greedy via norm bound) | OPEN | head ~1.3 -> ~0.5 ms after item 5 (~+4 %) | offline clustering + two-stage shader |
 | 13 | Prefill MoE GEMM: two tile heights (BM 64 for full experts, 16 for the tails; tile fill 81 % -> 95 %) | OPEN (report 3) | MoE GEMM +15-30 % -> prefill +8-15 % | new GEMM variant + dispatcher |
 | 14 | XOR bank swizzle in the GEMM LDS tiles | OPEN | only if conflicts exist (profile first) | small |
 | 15 | Raw-basis prefill statistics without the code-gen hit (separate pipeline variant compiled only when on, or raw q written by the graph) | patch kept (scratchpad rawpf_patch/) | prefill KL 0.00035 -> 0.00026 (measured, with tail) | earlier attempt cost -8 to -15 % prefill |
-| 16 | Per-layer / per-head sparse budgets (decode and prefill), from the dump analysis (layer 3/7 broad, 39 sharp) | OPEN | same KL at lower cost or lower KL at same cost | uses `JI_KV_DUMP` + scratchpad ana/ tools |
+| 16 | Per-layer sparse budgets (JI_SP_LBUDGET) MEASURED: late layers 8192 +2-3 % at unchanged KL (noise level); 64k row check pending before default | partly done | +2-3 % long-context decode | - |
 | 17 | 32-key sub-page selection in prefill (report 3 P3) | OPEN, lower priority now (prefill KL small) | prefill KL | core loop change (BC=128 blocks) |
 | 18 | KL harness resolution: more rows / longer tails (1024 positions/row = ~+-10 % noise) | OPEN | trustworthy decisions on <15 % effects | refs need full-attention runs |
 | 19 | Direct loader for EXL3 safetensors folders (skip the GGUF repack) | OPEN (convenience) | none (UX) | loader plumbing |
