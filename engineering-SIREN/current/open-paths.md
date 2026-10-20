@@ -22,7 +22,7 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 | 5 | ~~LM head IQ4_NL (from the BF16 head)~~ REJECTED 2026-10-20: decode 2k 44.6 -> 47.3 (+6 %), 245k +4 %, but KL 0.00033 -> 0.0044 (130k) / 0.00036 -> 0.0026 (99k), top-1 0.997 -> 0.976. Q5_K (333 MB) untested: at most +2-3 %. Real path: EXL3 head ~4 bpw (item 29, needs requant) | rejected | - | tools/swap_head.py kept |
 | 6 | ~~Dynamic top-k (JI_TOPK_TAU, engine option)~~ REJECTED 2026-10-20: KL 99k/130k tau 0.02: 0.0016/0.0008, 0.04: 0.0070/0.0022, 0.06: 0.031/0.0062; decode 2k 44.7 -> 44.7/45.1/45.7, 245k unchanged (a layer's experts already run in parallel: dropping one does not shorten the critical path) | rejected | - | - |
 | 7 | `v_sad_u8` from GLSL (GL_EXT_integer_dot_product `dotPacked4x8EXT(x, 0x01010101)`) - does RADV/ACO lower it to sad / cheap ops on gfx803? | OPEN | mul1 decode ~20 % cheaper per weight | ISA dump of a test shader |
-| 8 | srvpf "decode 0.0 t/s": /completion on the 132k docs prompt returns 0 tokens | OPEN (anomaly) | correctness check | look at stop reason / first token |
+| 8 | ~~srvpf decode 0.0 t/s~~ CLOSED: raw /completion on the docs prompt - the model predicts end-of-text after the document's last line (benign) | done | - | - |
 | 9 | JI_SP_NORM=2 LSE in attn_score instead of attn_topk (2-workgroup latency) | optional | makes NORM=2's -5 % KL nearly free | small shader change |
 
 ## Tier 1 - days
@@ -30,14 +30,14 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 
 | # | Path | Status | Expected gain | Cost / risk |
 |---|---|---|---|---|
-| 10b | **Dense (non-expert) projections in a bandwidth-bound format** (Q8_0 / Q6_K / Q5_K / IQ4_NL via JDE's mv kernels) instead of codebook-bound EXL3: dense mat-vecs are ~8-10 ms of ~22 ms/token at ~1.9x their memory floor | IN PROGRESS: hybrid GGUF with the dense tensors of the old mainline Qwen3.6 GGUF (tools/swap_tensors.py) | up to ~-4 ms/token short context (44 -> ~50 t/s); VRAM +/-; KL vs EXL3 dense to measure | BF16 source for better recipes (HTTP range fetch of the dense tensors) |
+| 10b | ~~Dense projections in mainline formats~~ REJECTED 2026-10-20 (hybrid with the old GGUF's IQ4_NL/Q8_0/Q5_K/Q6_K dense tensors): decode 44.6 -> 42.4 t/s short, 29.9 -> ~27.5 at 245k (bigger dense weights ate the VRAM cache; the mv path loses EXL3's fused prep/post), KL 0.012-0.013 (35x). EXL3 dense stays | rejected | - | - |
 | 10 | **mul1 + EXL3 any width** WORKING (engine f5ddada15 + fixes): MiniCPM-V 4.7 3.74 bpw converted (16.3 GiB), correct output, decode 34 t/s short (Qwen3.6 4.0: 44), prefill 319 t/s at 20k, API suite 44/45 (model answers trivial questions inside an unclosed think block). Needs JI_UBATCH=2048 at 262k. Open: KL/PPL reference for MiniCPM, mul1 decode cost (item 7), cache slots per width (item 11) | done (follow-ups open) | - | - |
 | 11 | Expert cache with byte-granular slots (mixed-width experts: 3/4/5-bit sizes differ by 1.7x; today slot = max size) | OPEN (after 10) | +20-40 % cache capacity on mixed-bit models | JDE slot allocator |
-| 12 | Clustered LM head (SV-Decode: h-space clusters, evaluate top 25 %, centroid fallback; exact for greedy via norm bound) | OPEN | head ~1.3 -> ~0.5 ms after item 5 (~+4 %) | offline clustering + two-stage shader |
-| 13 | Prefill MoE GEMM: two tile heights (BM 64 for full experts, 16 for the tails; tile fill 81 % -> 95 %) | OPEN (report 3) | MoE GEMM +15-30 % -> prefill +8-15 % | new GEMM variant + dispatcher |
+| 12 | ~~Clustered LM head (SV-Decode)~~ NOT APPLICABLE to the EXL3 head: its output Hadamard mixes 128-row blocks of consecutive token ids, so rows cannot be regrouped by cluster without re-quantization | rejected | - | - |
+| 13 | Prefill MoE GEMM two tile heights - DEPRIORITISED: our MoE GEMM already skips padded columns; the remaining cost of thin experts is the per-workgroup codebook decode, which a narrower tile does not reduce. Prefill split (7.2k): dense EXL3 GEMM 43 % (3.8-3.96 TFLOPS), MoE 42 % (~2.9), FA 10 % | low expected gain | - | - |
 | 14 | XOR bank swizzle in the GEMM LDS tiles | OPEN | only if conflicts exist (profile first) | small |
 | 15 | Raw-basis prefill statistics without the code-gen hit (separate pipeline variant compiled only when on, or raw q written by the graph) | patch kept (scratchpad rawpf_patch/) | prefill KL 0.00035 -> 0.00026 (measured, with tail) | earlier attempt cost -8 to -15 % prefill |
-| 16 | Per-layer sparse budgets (JI_SP_LBUDGET) MEASURED: late layers 8192 +2-3 % at unchanged KL (noise level); 64k row check pending before default | partly done | +2-3 % long-context decode | - |
+| 16 | ~~Per-layer sparse budgets (JI_SP_LBUDGET)~~ REJECTED as default: late layers 8192 = +2-3 % but the 64k row doubles KL (0.00034 -> 0.00075); option kept | rejected | - | - |
 | 17 | 32-key sub-page selection in prefill (report 3 P3) | OPEN, lower priority now (prefill KL small) | prefill KL | core loop change (BC=128 blocks) |
 | 18 | KL harness resolution: more rows / longer tails (1024 positions/row = ~+-10 % noise) | OPEN | trustworthy decisions on <15 % effects | refs need full-attention runs |
 | 19 | Direct loader for EXL3 safetensors folders (skip the GGUF repack) | OPEN (convenience) | none (UX) | loader plumbing |

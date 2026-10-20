@@ -1258,3 +1258,15 @@ Selected-page attention is not where decode time goes: halving the late budget g
 Profile (short context, JI_PROFILE_GPU, serialised): the dense EXL3 mat-vecs are ~8-10 ms of ~22 ms/token
 (8192x2048 84 us vs a 42 us memory floor; codebook-bound per the 2026-10-19 probes) - the main short-context lever.
 Next: dense projections in a bandwidth-bound mainline format (hybrid GGUF, tools/swap_tensors.py).
+
+## 2026-10-20 Dense mainline-format hybrid, late budgets at 64k, prefill op split: rejected / deprioritised
+
+- Hybrid GGUF (tools/swap_tensors.py): EXL3 experts + head, dense projections from the old mainline Qwen3.6 GGUF
+  (142 IQ4_NL, 94 Q8_0, 10 Q5_K, 4 Q6_K): decode 2k 44.6 -> 42.4, 245k 29.9 -> ~27.5 t/s (dense 1.49 vs 1.30 GB:
+  the VRAM expert cache dropped to 0, elastic slots only; the plain mv path has no fused prep/post); KL 0.0120 (130k) /
+  0.0129 (99k) vs 0.00033 / 0.00036. Rejected - mainline quants without imatrix are far below EXL3 4.0.
+- Late-layer budget 8192: 64k row KL 0.00034 -> 0.00075. Not a default.
+- srvpf "0 tokens": the model predicts end-of-text after the docs prompt's last line (benign).
+- Prefill op split (7.2k, perf logger): dense EXL3 GEMM 43 % (3.8-3.96 TFLOPS), MoE 42 % (~2.9), flash attention
+  10 %. Two-height MoE tiles deprioritised: padded columns are already skipped; the thin-expert cost is the
+  per-workgroup trellis decode. Clustered LM head not applicable to the EXL3 head (128-row output Hadamard blocks).
