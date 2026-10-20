@@ -1270,3 +1270,43 @@ Next: dense projections in a bandwidth-bound mainline format (hybrid GGUF, tools
 - Prefill op split (7.2k, perf logger): dense EXL3 GEMM 43 % (3.8-3.96 TFLOPS), MoE 42 % (~2.9), flash attention
   10 %. Two-height MoE tiles deprioritised: padded columns are already skipped; the thin-expert cost is the
   per-workgroup trellis decode. Clustered LM head not applicable to the EXL3 head (128-row output Hadamard blocks).
+
+## 2026-10-20 Second RX 580: bring-up, dual-stage JDE decode (engine c16539623)
+
+Hardware: card 2 sits in the chipset slot, PCIe 2.0 x4: xferbench (lab/xferbench) 1.27 GB/s host->VRAM, 1.07 back
+(x16 card: 11.3 / 6.8). RADV enumerates the x4 card first (Vulkan0); single-card mode is pinned to Vulkan1
+(serve.sh JI_GPU=1, kl.sh, restart.sh).
+
+- Exposing both devices dropped prefill 453 -> 25 t/s: ggml-vulkan's multi-device pinned-memory import path fell
+  back to staged copies. GGML_VK_HOST_DEVICE=N allocates pinned host memory through device N only (eb978fdbd).
+- llama.cpp pipeline parallelism with host experts: every pipeline copy duplicates the offloaded expert weights
+  (45 GB). Not usable; dual prefill needs its own double-buffered expert staging (open-paths #21).
+- JDE dual stage: stage 1 = layers 0..S-1 on the x16 card (expert cache + zero-copy misses as before), stage 2 =
+  layers S..39 + head on the x4 card with all their experts resident. Hidden state via host once per token.
+- Bug 1: stage 1 carved elastic expert slots from every layer's KV buffer, incl. the x4 card's -> layer range.
+- Bug 2 (the big one): the x4 card's compute buffer was 6.7 GB at ub 4096 / 3.4 GB at ub 2048 (262k) and evicted
+  its weights to GTT: stage 2 ran at 530 ms/token (LM head 299 ms = 380 MB at x4 speed). Cause: the chunked
+  prefill FA takes 256-row views of the KQ mask; the x16 card reads the host mask in place, the x4 card cannot, and
+  the sched made one full-size copy per view (8 chunks x 3 layers, all alive at once). Fix in ggml-backend: copy the
+  viewed input once, view the copy -> 1.3 GB at ub 2048. JI_RESERVE_DEBUG lists the big reserve tensors.
+- Sparse metadata per stage (stage 2: 96 MiB instead of 321).
+
+Same build, 262k context, server (`q13.sh`/`q14.sh`): decode short / 100k / 245k (saved KV), prefill 80k prompt:
+
+| config | short | 100k | 245k | prefill 80k |
+|---|---|---|---|---|
+| single (x16 card) | 48.5 | 33.8 | 30.0 | 347.8 |
+| JI_DUAL=31 ub 1024 | 48.8 | 36.9 | 33.6 | 278.8 |
+| JI_DUAL=30 ub 1024 | 49.8 | 36.8 | 34.2 | 278.5 |
+| JI_DUAL=31 ub 1536 | 49.3 | 38.7 | 33.7 | 297.1 |
+| JI_DUAL=31 ub 2048 | 49.3 | 37.1 | 34.1 | 324.8 |
+| **JI_DUAL=32 ub 4096** | **49.8** | **36.3** | **33.0** | **349.1** |
+| JI_DUAL=31 ub 4096 | over-commits (1.8 t/s; 226 t/s prefill) | | | |
+
+Decode KL (130k, L_code r1) single = dual31 ub2048 = dual31 ub4096 = 0.00033: the dual path is bit-identical.
+Why the gain is modest: the cards take turns within a token (no overlap), short-context decode is not miss-bound
+(single card already caches most hits), and prefill is compute-bound (~9 s GPU per 4096-token ubatch vs ~1.5 s
+of expert upload) - card 2 only removes its layers' upload. Dual decode gains come from attention/KV and dense
+work of 8-9 layers running from a card whose VRAM is not shared with an expert cache.
+Next for dual: prefill pipelining across the cards (~1.3x ceiling with card 2 resident-only), decode expert-server
+(hot experts of all layers on card 2, per-layer parallel), MTP verify on two cards.

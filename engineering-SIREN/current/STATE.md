@@ -21,18 +21,18 @@ Targets (dev box AUX-1; see README for the table):
   set, round trips, loops, tool_choice none/required/named), JSON / JSON schema, prompt caching across turns and tool
   loops, Completions, Responses, Anthropic Messages (tools, tool_choice, thinking, streaming, Claude-Code-style),
   disconnects, queued requests, long-output coherence; `--long`: 117k-token needle via the API (sparse attention).
+- Dual card (2026-10-20): see resume point.
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
-## Resume point (2026-10-20, second RX 580 arrived)
+## Resume point (2026-10-20, two RX 580s)
 
-AUX-1 shut down for the second-card install. State: engine dbdc79f9b+ (78b67811a JI_SP_LBUDGET, c23fee6ec minimal
-cache), junkinfer docs current; grub has iommu=pt + amdgpu.lockup_timeout; restart.sh drops page caches. Models on
-the SSD: Qwen3.6 EXL3 4.0 (default), MiniCPM-V 4.7 EXL3 GGUF; MiniCPM safetensors, old IQ4_NL GGUF and the
-opt-native ROCm tree in ~/models/ssd-overflow (HDD). Vision: Qwen3.6 mmproj not yet downloaded (ggml-org
-Qwen3.6-35B-A3B-GGUF mmproj Q8_0; the SSD's mmproj-Q8_0.gguf is MiniCPM-V's tower).
-Next: dual-card bring-up per dual-card-design.md (lspci link of slot 2, per-card bandwidth, RADV device order,
-both cards' DPM udev rule), then prefill layer split, decode expert-server.
+AUX-1 has two cards: Vulkan1 = slot 1 (PCIe 3.0 x16), Vulkan0 = chipset slot (PCIe 2.0 x4, 1.27 GB/s). Single-card
+mode is pinned to Vulkan1 (serve.sh JI_GPU=1). Dual: `JI_DUAL=32 scripts/serve.sh` (JDE stage per card, engine
+c16539623): decode short 49.8, 100k 36.3, 245k 33.0 t/s (single 48.5 / 33.8 / 30.0); prefill = single (349 t/s at 80k).
+KL identical to single. kl.sh takes DUAL=S UB=N. Watch card0 GTT use (over-commit = weights at x4 speed).
+Next: dual prefill pipelining (double-buffered expert staging), decode expert-server on card 2, MTP on two cards;
+vision (Qwen3.6 mmproj download approved, HyperQwen #36 host-resident tower).
 
 ## Open optimization paths
 

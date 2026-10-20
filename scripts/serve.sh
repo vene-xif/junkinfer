@@ -35,6 +35,23 @@ esac
 
 # RADV: keep device-local allocations out of GTT when VRAM is nearly full (2.5x decode on this card, Aug 2026)
 export RADV_PERFTEST=${RADV_PERFTEST-nogttspill}
+# Which GPU(s): AUX-1 has the PCIe 3.0 x16 card at Vulkan index 1 and the chipset PCIe 2.0 x4 card at index 0
+# (enumeration follows the PCI bus). Single-card mode must run on the x16 card: expert misses stream over its link.
+# JI_GPU=1 (default) pins it; JI_GPU=all exposes both (dual-card modes).
+JI_GPU=${JI_GPU:-1}
+# JI_DUAL=S (dual card): layers 0..S-1 on the x16 card (Vulkan1, experts streamed from pinned host memory and cached),
+# layers S..39 + the LM head on the x4 card (Vulkan0) with their experts resident in its VRAM (~290 MiB per layer).
+# JDE runs one stage per card; pinned host memory belongs to the x16 card (GGML_VK_HOST_DEVICE).
+# At 262k: JI_DUAL=32 (ub 4096) - decode 245k 30.0 -> 33.0 t/s, prefill = single card; JI_DUAL=31 needs
+# JI_UBATCH=2048 (245k 33.8, prefill -7 %). The x4 card must never over-commit: evicted weights run at PCIe 2.0 x4
+# speed (watch /sys/class/drm/card0/device/mem_info_gtt_used: ~130 MB is normal, GBs = over-committed).
+EXPERT_ARGS=(--cpu-moe)
+if [ -n "${JI_DUAL:-}" ]; then
+  JI_GPU=all
+  export GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
+  EXPERT_ARGS=(-dev Vulkan1,Vulkan0 -ts "$JI_DUAL,$((41 - JI_DUAL))" --n-cpu-moe "$JI_DUAL")
+fi
+[ "$JI_GPU" != all ] && export GGML_VK_VISIBLE_DEVICES=$JI_GPU
 
 if [ "${JI_ENGINE:-jde}" = jde ]; then
   # JunkInfer decode engine (JDE): custom Vulkan decode, experts in host RAM + an adaptive VRAM expert cache sized
@@ -55,7 +72,7 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
   SLOT_ARGS=()
   [ -n "${JI_SLOT_DIR:-}" ] && SLOT_ARGS=(--slot-save-path "$JI_SLOT_DIR")
   exec "$ENGINE/llama-server" -m "$MODEL" \
-    -ngl 99 --cpu-moe --no-repack --load-mode none -fa on --fit off \
+    -ngl 99 "${EXPERT_ARGS[@]}" --no-repack --load-mode none -fa on --fit off \
     -c "${JI_CTX:-262144}" -ctk q8_0 -ctv q8_0 \
     -np 1 --jinja -t "${JI_THREADS:-6}" -b "$UB" -ub "$UB" \
     --host "${JI_HOST:-127.0.0.1}" --port "${JI_PORT:-8080}" \
