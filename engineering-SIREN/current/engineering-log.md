@@ -1415,3 +1415,15 @@ TP2 43.9 -> TP2 + n-gram spec 50.6 t/s; story single 38.4 -> TP2 52.1 (spec 50.4
 Where 80 t/s could come from: MTP drafts inside JDE (~1.5 ms per draft instead of 9 ms through the ggml graph):
 3 drafts at 0.78 / 0.57 / 0.44 acceptance -> ~2.8 tokens per ~38 ms step -> ~73 t/s; grouped expert decode in
 verify (each distinct expert decoded once per step) would add ~10 %.
+
+## 2026-10-21 (later) TP2 micro-steps: direct partial writes (no), router-fused split, TP profile (engine acfba74b7, e9676da3f)
+
+**Gains: none measurable (59 t/s short).**
+- JI_TP_DIRECT=1 (kernels write their partials straight into the exchange area, no copy): GPU 15.1 -> 16.0 ms per
+  token - writes to host memory from the mat-vec / combine kernels cost more than the VRAM write + one copy. Off.
+- Ownership split folded into router_fused (TP2): no tp_split dispatch + barrier per layer; neutral, kept.
+- JI_TP_GPROF primary profile (short): syncs 2.2 ms/token (80 x 27.6 us incl. waits), DeltaNet row blocks 1.8 (at
+  ALU rate), routed experts 2.5, LM head half 1.1, router 0.9, x3 input stages 0.85, attn_gqa 0.55 (55 us per
+  layer at short context - a candidate for a small-n_kv kernel), combine 0.4, shared-expert gate 0.3.
+Decode is at its structural plateau (~60 t/s): per-card trellis ALU + sync floor + per-layer imbalance. Remaining
+big levers: MTP drafts inside JDE (with grouped expert decode in verify), prefill GEMM efficiency.
