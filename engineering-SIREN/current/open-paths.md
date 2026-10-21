@@ -47,11 +47,11 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 
 | # | Path | Status | Expected gain | Cost / risk |
 |---|---|---|---|---|
-| 21 | **Dual card**: done - **JI_TP=2 full tensor parallel decode (+ per-token expert balance, 1-4 token steps): short 46.3 -> 59.1, 100k 33.8 -> 45.2, 245k 30.0 -> 41.1; code rewrite with n-gram spec 32.6 -> 50.6**. Open: (a) MTP drafts inside JDE (+ grouped expert decode in verify) - the path to ~75-80, (b) cheaper syncs, (c) router f16, (d) prefill on two cards (x4 link: pipelining) | in progress (engineering-log 2026-10-21) | (a) +20-30 % | ALU-bound trellis decode ~200 G weights/s per card |
+| 21 | **Dual card**: done - **JI_TP=2 full tensor parallel decode (+ per-token expert balance, 1-4 token steps): short 46.3 -> 59.1, 100k 33.8 -> 45.2, 245k 30.0 -> 41.1; code rewrite with n-gram spec 32.6 -> 50.6**. Open: (a) MTP drafts inside JDE: done, no gain (verify 2/3/4 tokens 25/33/50 ms vs 17; engineering-log 2026-10-21 later), (b) cheaper syncs, (c) router f16, (d) prefill on two cards (x4 link: pipelining) | in progress (engineering-log 2026-10-21) | (a) none | ALU-bound trellis decode ~200 G weights/s per card |
 | 22 | Vision: MiniCPM-V 4.7 tower (features injected at decoder layer 6 - `insert_layer_id`), streamed from host RAM per block (HyperQwen PR #36 pattern: bulk copy per block, not zero-copy; ~300 MB VRAM) | in scope (user), after 10 | image input at low VRAM cost | mtmd / clip support for the tower + injection point |
-| 23 | MTP on JDE: draft step on the decode engine, grouped (dedup) expert verify, dynamic draft vocabulary (NanoSpec), calibrated sub-4-bit MTP head | parked until card 2 (single card MTP ~3x slower today) | 1.3-1.8x decode if verify cost is fixed | large |
+| 23 | MTP on JDE: draft step on the decode engine, grouped (dedup) expert verify, dynamic draft vocabulary (NanoSpec), calibrated sub-4-bit MTP head | DONE (opt-in, helper GPU, 1.8 ms/draft, acceptance = reference) - no gain: verify +8-10 ms per token | needs cheap multi-token expert decode | - |
 | 24 | KVarN6 KV cache | low priority (attn_hm faster on q8_0; VRAM gain ~+5 % at 247k) | ~0.8 GB VRAM at 262k | kernel work |
-| 25 | Lossless grouped verify (one read per distinct expert across verified tokens) | OPEN | speculation becomes profitable | MoE kernel rework |
+| 25 | Lossless grouped verify (one read per distinct expert across verified tokens) | TRIED (JI_X3_GROUP): not faster - LDS occupancy, 16-30 % duplicates | speculation becomes profitable | MoE kernel rework |
 | 26 | DuoAttention-style per-head retrieval / streaming classes for the 160 attention heads | OPEN | lower budgets on streaming heads | calibration + per-head budgets |
 
 ## Tier 3 - needs a quantization GPU (VENE, deferred by user) or re-quantization

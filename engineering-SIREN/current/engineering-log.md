@@ -1436,3 +1436,30 @@ big levers: MTP drafts inside JDE (with grouped expert decode in verify), prefil
   the first decode step, state in / out 35-50 ms per request.
 - `--spec-type draft-mtp` with the MTP sidecar on the x4 card (-devd Vulkan0): the first TP2 sync is lost (primary
   never marked), the x4 card resets (clean). Not combinable yet; ngram specs work. README / serve.sh note it.
+
+## 2026-10-21 (later) MTP head on JDE (helper GPU), verify-cost scaling, grouped expert decode (engine edf3f579f)
+
+**Gains: none in decode / prefill (MTP lossless and correct, but slower than no speculation on this hardware).**
+
+- Verify cost, TP2 (`examples/junk-vbench`, real text, warm cache, 262k context): 1 / 2 / 3 / 4-token step
+  17.3 / 25.3 / 33.1 / 49.8 ms. Per-step routed selections on the x16 card (JI_PROFILE): 190 / 384 / 508 / 701,
+  distinct experts 190 / 312 / 372 / 488, PCIe misses 12-44 / 24-57 / 56 / 108 (the 4-token cliff = misses).
+  Kernel profile: x3_mv_moe 37 / 64 / 102 / 211 us per dispatch; dense EXL3 NT=4 also has an LDS-occupancy cliff
+  (256x2048: 14.6 -> 37.3 us at nt 3 -> 4; 6 KB LDS per wave -> 2 workgroups per CU).
+- MTP draft head on the JI_TP=2 helper GPU (`jde_mtp_init`): the draft-mtp context's sidecar (IQ4_NL block, Q6_K head,
+  Q8_0 embedding) loads on the CPU (`-md mtp-IQ4_NL.v2.gguf --spec-type draft-mtp -ngld 0 -devd none
+  --no-spec-draft-backend-sampling`; backend samplers force the graph path); JDE copies it to the helper's VRAM
+  (560 MiB with a 64k-row head + 272 MiB K/V at 262k; JI_TP_MARGIN_MIB=1900 -> helper hot set 61 % of the traffic
+  instead of 70 %). 1.8 ms per draft call (head 0.66 ms) vs ~15 ms on the CPU graph path; the x16 card has no room
+  (289 MiB free at 262k: the ggml draft on Vulkan1 over-committed it -> "Not enough memory for command submission").
+  Acceptance (mtpacc, draft 3, t=0): 0.630 full vocabulary = the ggml reference 0.644; 0.605 with the first 64k ids
+  (ids < 64k cover 96.5-98 % of the corpora, < 96k 99.2-99.9 %). Outputs lossless (chat3 md5s identical).
+- End to end (TP2, spectest, t/s): story none 51.9 / MTP n1 49.4 / n2 42.9; code rewrite 44.2 / 44.0 / 42.0. A step
+  with 2 drafts = drafts 6.2 ms (2 MTP calls + top-k over 248k on the CPU) + 3-token verify ~40 ms (with rollback
+  snapshots) + catch-up / sampling ~4 ms -> even at 98 % acceptance ~56 t/s. Each extra verified token costs 8-10 ms:
+  EXL3 routed experts are ALU-bound per row (no amortisation across tokens) and the cold experts stream over PCIe.
+- Grouped expert decode (JI_X3_GROUP=2..4: an expert's first row decodes for up to G tokens): not faster (2-token
+  24.7 -> 26.0, 3-token 32.5 -> 34.0 ms at G=2; G accumulator rows cost LDS occupancy, duplicates are 16-30 %). Off.
+- Fix: JDE's nextn rows are now the post-output_norm hidden state (the graph's h_nextn) - JDE gave the MTP head the
+  pre-norm x before.
+Conclusion: speculation pays here only with free drafts (n-gram on copy-heavy text). MTP stays opt-in.

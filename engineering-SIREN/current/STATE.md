@@ -31,7 +31,8 @@ AUX-1: Vulkan1 = x16 card, Vulkan0 = chipset x4 card. Best dual mode: `JI_TP=2 s
 decode short 59.1, 100k 45.2, 245k 41.1 t/s (single 46.3 / 33.8 / 30.0); code rewrite + n-gram spec 50.6 (single 32.6);
 prefill = single (~348 t/s at 80k).
 JI_TP=1 (MoE only) and JI_DUAL=32 (layer split) remain. kl.sh TP=2 / TP=1 / DUAL=S. Profiling: JI_TP_PROF=64.
-Next: attention kv-head split, TP2 state copy-back speed, prefill on two cards, MTP; vision (mmproj approved).
+MTP on JDE (helper GPU, opt-in): correct and lossless, no decode gain (verify cost); see the 2026-10-21 log.
+Next: prefill on two cards, cheaper multi-token expert decode (LDS / misses); vision (mmproj approved).
 
 ## Open optimization paths
 
