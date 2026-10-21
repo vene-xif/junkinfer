@@ -1463,3 +1463,21 @@ big levers: MTP drafts inside JDE (with grouped expert decode in verify), prefil
 - Fix: JDE's nextn rows are now the post-output_norm hidden state (the graph's h_nextn) - JDE gave the MTP head the
   pre-norm x before.
 Conclusion: speculation pays here only with free drafts (n-gram on copy-heavy text). MTP stays opt-in.
+
+## 2026-10-21 (later) Gemini reports 4-8 triage (prefill focus)
+
+Reports (user): cYlJ1Pfl19JC (dual-Polaris levers), VM59nTdOUtXz (speculative / multi-token verify, PL),
+LrtXGEcCJSco (retraining-free PCIe-constrained MoE), mp7TzLpksJMF (bandwidth compression), 4DUYwJ2vt7Vy (EXL3 on
+GCN4, PL). Prefill-relevant, against our state (7.2k: dense EXL3 GEMM 43 % at 3.8-3.96 TFLOPS, MoE 42 % at ~2.9,
+FA 10 %; at depth FA-bound):
+- Already done: GQA-folded FA with Q in SGPRs (ji_fa2, 84 VGPRs); decode-once EXL3 tiles in the GEMMs; sparse
+  prefill with the variance tail (their KL figures predate it); skipped padded MoE columns.
+- Not applicable: Psumbook / CodeGEMM / T-MAC LUT GEMM (EXL3 weights are 16-bit trellis windows through a hash, no
+  small sub-vector codebooks; prefill amortises the decode over the token tile anyway).
+- Open, modest: MoE GEMM narrow-tile path for thin experts (+~10 % if 2.9 -> 3.9 TFLOPS; our earlier read: the thin-
+  expert cost is per-workgroup decode), GDN chunk size 16/32 (small share), VGPR <= 128 audit of the GEMMs.
+- Dual-card prefill (their #9): layer pipeline is VRAM-limited on card 2 (~8 layers resident: <= 1.25x); a
+  functional split (card 2 = dense / GDN / attention projections, card 1 = routed experts, two micro-batches in
+  flight) is the only path near 2x; FA kv-head split for long prompts (card 2 already mirrors kv head 1 in TP2).
+- Lossy / decode-only items (dynamic top-p routing, low-bit cold experts, timing straps, verify expert budgets):
+  not prefill; the lossy ones are KL-gated.
