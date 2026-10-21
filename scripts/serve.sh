@@ -56,7 +56,9 @@ elif [ "${JI_TP:-0}" != 0 ]; then
   # attention on the x16 card. Decode short 46.3 -> 58.0, 100k 33.8 -> 43.8, 245k 30.0 -> 40.0 t/s (2026-10-21).
   # JI_TP=1: only the routed experts on the x4 card (short 49.9, 100k 41.0, 245k 37.9). The model runs on the x16
   # card as in single-card mode; prefill = single card. JI_TP_HOT = routing counts file, JI_TP_FRAC = share of
-  # the routing traffic the x4 card takes (TP=2 default 0.7, TP=1 1.0), JI_TP_SLOTS = cap.
+  # the routing traffic the x4 card takes (TP=2 default 0.7, TP=1 1.0), JI_TP_SLOTS = cap. JI_TP_DUP (TP=2, default
+  # 0.25): share of the traffic held by both cards (per-token balance). Validated: API suite 45/45, 117k needle.
+  # Not yet with --spec-type draft-mtp (the draft context on the x4 card hangs the first sync); ngram specs work.
   JI_GPU=all
   export JI_TP GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
   export JI_TP_HOT=${JI_TP_HOT:-$(cd "$(dirname "$0")/.." && pwd)/ref/tp/tp_hot_qwen36_exl3.bin}

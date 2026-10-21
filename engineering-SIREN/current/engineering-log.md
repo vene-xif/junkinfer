@@ -1427,3 +1427,12 @@ verify (each distinct expert decoded once per step) would add ~10 %.
   layer at short context - a candidate for a small-n_kv kernel), combine 0.4, shared-expert gate 0.3.
 Decode is at its structural plateau (~60 t/s): per-card trellis ALU + sync floor + per-layer imbalance. Remaining
 big levers: MTP drafts inside JDE (with grouped expert decode in verify), prefill GEMM efficiency.
+
+## 2026-10-21 (later) JI_TP=2 validation: API suite 45/45, 117k needle; draft-mtp incompatible
+
+- `scripts/api_suite.py` against JI_TP=2: 45/45 (tools, streaming, thinking, prompt caching across turns, Anthropic /
+  Responses, disconnects, queued requests); long-output coherence at 56.2 t/s.
+- `--long` needle (117,044 prompt tokens): pass, prefill 341 t/s, the head-1 KV mirror copy of 117k cells 0.78 s at
+  the first decode step, state in / out 35-50 ms per request.
+- `--spec-type draft-mtp` with the MTP sidecar on the x4 card (-devd Vulkan0): the first TP2 sync is lost (primary
+  never marked), the x4 card resets (clean). Not combinable yet; ngram specs work. README / serve.sh note it.

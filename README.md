@@ -41,6 +41,12 @@ JI_HOST=0.0.0.0 JI_API_KEY=secret scripts/serve.sh  # LAN, with a key
 JI_THINKING=off scripts/serve.sh                     # thinking off by default (per request: enable_thinking)
 ```
 
+Two cards (the second may sit in a chipset x4 slot): `JI_TP=2 scripts/serve.sh` runs decode tensor-parallel on both
+(half of every layer per card, the second card also holds a hot-expert set; prefill stays on the first card).
+Measured on the dev box (2026-10-21): decode 46 -> 59 t/s short, 34 -> 45 at 100k, 30 -> 41 at 245k context; API
+suite 45/45 and the 117k needle pass. With `--spec-type ngram-map-k` (copy-heavy output such as code edits) 51 t/s
+where one card does 33. Not yet combinable with `--spec-type draft-mtp`.
+
 Other options are listed at the top of `scripts/serve.sh`; `scripts/junkinfer.service` is a systemd unit.
 Loading takes ~1.5 min. One request runs at a time (others queue); the host-RAM prompt cache keeps recent
 conversations, so switching between a few chats or agent sessions does not re-read them from scratch.
