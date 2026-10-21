@@ -1481,3 +1481,32 @@ FA 10 %; at depth FA-bound):
   flight) is the only path near 2x; FA kv-head split for long prompts (card 2 already mirrors kv head 1 in TP2).
 - Lossy / decode-only items (dynamic top-p routing, low-bit cold experts, timing straps, verify expert budgets):
   not prefill; the lossy ones are KL-gated.
+
+## 2026-10-21 (night) Two-card JDE prefill, sparse prefill on JDE, TP2 sparse decode fix, hardware
+
+Hardware: the x4 card fell off the PCIe bus twice under JDE TP prefill ("device lost from bus", recovery -19; the
+first time it looked like a prefill deadlock). Both cards share one daisy-chained PCIe power cable. Card 2 alone at
+145 W (gpustress, 5 min) and both cards under synthetic load at 100 / 120 / 135 / 145 W held; the real workload at
+100 W held where it failed at 145 W. Until the new PSU / case: power cap 100 W per card
+(/etc/udev/rules.d/31-amdgpu-powercap.rules). The model SSD (mSATA in a SATA adapter) logs 10B8B / PHYRdyChg link
+resets independent of GPU load. All numbers below at 100 W.
+Method: prefill at depth from saved KV (`~/jt/dpb.py N`: restore depth_N.bin, prefill ~5-7.5k new tokens on top) -
+seconds instead of 4-15 min per point.
+
+- JDE TP prefill (JI_TP=2 JI_JPF=1, JI_TP_MARGIN_MIB=1500): both cards prefill on the TP2 decode layout (design:
+  tp-prefill-design.md, milestones 1-3), two micro-batches, f16 partials through the host exchange, relay thread.
+- Sparse prefill attention on JDE (pf_fa_sparse = ji_fa2_sparse with the causal mask from positions, pf_pmeta), same
+  settings as the graph path (JI_SPARSE_PF 8192 from JI_SPF_MIN 32768, dense prompt tail on layers 3, 7, 11).
+- Prefill t/s, restored context + tail (graph TP2 -> JDE TP dense attention -> JDE TP sparse):
+  2k + 5.5k 343 -> 393; 72k + 7.5k 240 -> 235 -> 304; 247k + 7.5k 128 -> 98 -> 213.
+- KL (L_code, 1025-token tail as ONE prefill batch, JR_TAIL_B=1025): 130k graph 0.00050 / JDE TP 0.00050;
+  261k 0.00045 / 0.00065 (f16 exchange partials).
+- Bug found on the way, TP2 sparse decode (default config, contexts >= 32k): the primary's kv head 0 read page
+  metadata at slot = layer while rebuilds write layer * 2 + head -> KL 0.041 (130k) / 0.232 (261k), now 0.00037 /
+  0.00033 (single card 0.00033 / 0.00028). Engine 63d680059. All TP2 depth quality numbers before it are invalid.
+- Decode with JI_TP_MARGIN_MIB=1500 (helper prefill scratch): short 55.9 -> 54.3 t/s; 245k decode warms over runs
+  (28.7 -> 32.9 -> 35.8 on one context), so depth decode comparisons need equal warm-up.
+- Tools: JI_PF_GPROF=1 (prefill GPU ms per kernel label per rank; waits per segment, breakdown only), JI_TP_HDENSE=1
+  (debug: helper head dense), ~/jt/dpb.py, ~/jt/gpustress, dualstress.sh, pwrlog.sh; kl.sh KLX=extra args.
+- Failure handling: a failing rank stops submitting (J.fail), the relay polls and the main thread signals the peers'
+  remaining semaphore values so the other rank cannot hang.
