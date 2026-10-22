@@ -32,10 +32,14 @@ decode short 59.1, 100k 45.2, 245k 41.1 t/s (single 46.3 / 33.8 / 30.0); code re
 prefill = single (~348 t/s at 80k).
 JI_TP=1 (MoE only) and JI_DUAL=32 (layer split) remain. kl.sh TP=2 / TP=1 / DUAL=S. Profiling: JI_TP_PROF=64.
 MTP on JDE (helper GPU, opt-in): correct and lossless, no decode gain (verify cost); see the 2026-10-21 log.
-Two-card prefill (2026-10-21, 100 W cap until the PSU swap): `JI_TP=2 JI_JPF=1 JI_TP_MARGIN_MIB=1500` - JDE TP
-prefill with sparse attention: 393 t/s (2k depth), 304 (72k), 213 (247k) vs graph 343 / 240 / 128. Fixed TP2 sparse
-decode metadata indexing (KL 0.04 -> 0.0004 at 130k; earlier TP2 depth KL figures were wrong). Prefill tests at depth:
-`~/jt/dpb.py N` (saved KV). Next: kernel profile (JI_PF_GPROF) -> GEMM / upload / balance toward 1000 t/s.
+Two-card prefill (2026-10-22, 100 W cap until the PSU swap): `JI_TP=2 JI_JPF=1 JI_TP_MARGIN_MIB=1500` (JDE TP
+prefill, sparse attention with 128-key pages, exchange queue, BK16 GEMMs). 100 W: fresh 7.2k prompt 555 t/s warm
+(507 first after start; graph path 484 at 145 W), 4096-token ubatch 630, restored 72k ~395, steady 247k ubatch 467.
+KL unchanged (0.0003-0.0007 vs full attention at 130k / 261k). Fixed TP2 sparse decode metadata (KL 0.04 -> 0.0004).
+Both GPUs are power-bound at 100 W. Open toward 1000 t/s: EXL3 GEMM efficiency (~45 % of peak; 64 VGPR, 4 waves /
+SIMD, no spills - barrier / LDS-latency bound: double-buffered LDS), TP overhead (~1.1 s of GEMM + ~1.8 s on the helper
+not attributed per ubatch), JI_PF_NMB=4 fails. Re-measure everything at 145 W after the PSU swap. Prefill tests at
+depth: `~/jt/dpb.py N [extra]` (saved KV; the first ubatch after a restore copies the helper's kv head).
 Vision (mmproj approved) later.
 
 ## Open optimization paths

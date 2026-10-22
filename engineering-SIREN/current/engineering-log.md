@@ -1544,3 +1544,6 @@ queue timestamp at issue) and skip experiments (JI_PF_SKIP, JI_PF_NOUP) corrupt 
   boost), so only wall time compares configurations.
 - c2b093a56: pipelines at init (first prompt 466 -> 501), helper scratch sized once, rank 0 uploads only its
   experts (pf_copyr run table; neutral). Warm restored 2k + 5.5k: 557 t/s.
+- 9d90eb2e5: q / k / v and shared gate / up stage inputs together (neutral). Fresh prompts (cache off, 100 W): 7.2k
+  507 first / 555 warm, 33k 466 average. TP GEMM split per rank (dense / routed, s): 2.54 / 2.59 and 2.10 / 1.49;
+  single card 4.14 / 3.47. pf_mm stats (RADV_DEBUG=shaderstats): 64 VGPRs, 13 KiB LDS, 4 waves per SIMD, no spill.
