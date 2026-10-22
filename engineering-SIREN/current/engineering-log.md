@@ -1642,3 +1642,14 @@ records, the validated KVSIM arithmetic) and attn_hmr (decode attention over rec
 attn_merge as before). Test harness JI_ATTN_TEST=n JI_ATTN_KVR2=1; not yet run. Remaining: prefill readers
 (pf_fa / pf_fa_sparse / pf_pmeta), TP2 mirror source, elastic-slot accounting, state save/restore (q8 rows out,
 ingest in), truncation (unseal), KL gate.
+
+## 2026-10-23 (later) Hermes agent: tool calls, crash after a long prompt
+
+- Chat template: Qwen-Sharp (peculiar-ragdoll/Qwen-Sharp-Chat-Templates, not in git - see serve.sh) by default.
+  Agent-style test (~/jt/tooltest.py: tools, streaming, tool-result turn): structured tool_calls in all three cases.
+- BUG (open, top priority): with Hermes, a 23.7k-token prompt was followed by a TP2 hang > 20 s at the first decode
+  step ("TP2 sync 0 lost (primary 0, helper 1)", server fell back to one GPU); the next request aborted the process
+  (SIGABRT, no message; apport log; crash log ~/junkinfer/logs/server.20261022-2241.crash.log). Related to the
+  post-prefill bugs above (decode slowdown after large prefills, MTP garbage after deep contexts): something left
+  behind by a multi-ubatch JDE prefill breaks the next TP decode steps. Mitigation: serve_prod.sh runs a supervisor
+  that restarts the server on exit (logs/restarts.log, logs/server.<time>.crash.log).
