@@ -1565,3 +1565,16 @@ Speeds at the start of the list: decode ~53 t/s short (55 without the prefill ma
    expected to pay at 100 W; work reduction (9, 10) is.
 5. Split exchange queues (JI_PF_X2): 614 vs 628, opt-in. 6. Router once: rejected (a sync point inside the MoE);
    small-N f32 kernels: latency, not energy - not pursued; NMB=4 fixed (command buffers): 586 t/s, 3: 598, 2 stays.
+7. 8-bit exchange (JI_PF_XQ8): 650 vs 629 t/s but KL 0.00048 -> 0.00156 at 130k: opt-in. 8. Upload ceiling
+   (JI_PF_NOUP): 660 t/s (~5 %); CP-DMA uploads (JI_PF_UDMA) 560 t/s, and AUX-1 hard-locked in its third run (silent,
+   during model load; journal shows only the SSD link at 1.5 Gbps / 155 exceptions): do not use. Cache reuse for
+   uploads not built (multi-buffer GEMM for <= 5 %).
+3. Helper hot slots (simulated by JI_TP_MARGIN_MIB 1500 -> 900: 2535 -> 2935 slots): decode 2k 54 / 54.9, 64k 44.3 /
+   44.0 - no gain; the half-dense refactor is not worth its risk.
+9. Sparse selection shared by 8 / 16 positions (JI_PF_SPP): 245k steady 477 -> 481 / 486 t/s, all-sparse KL 0.0016
+   -> 0.0021 / 0.0038: rejected. Budget halving and tail-estimate removal earlier were also small: no redesign.
+10. GEMM: 256-thread 8-row variants (JI_PF_DV=r8 8x8 / r864 8x4, JI_PF_IV=r8): 628 / 570 / 599 vs 631. Power test:
+   80 W 488 t/s vs 100 W 629 (clocks 940-1019 vs 1106-1198 MHz): prefill is power-bound at the cap - time follows the
+   energy of the f32 FMAs; latency / occupancy / LDS rewrites cannot pay at 100 W (only at 145 W).
+Final state of the list (100 W): prefill fresh 7.2k 557 warm / 545 first, 4096-token ubatch ~630, steady 247k 477,
+decode 53-54 t/s short, 44 at 64k.

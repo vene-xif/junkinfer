@@ -36,7 +36,8 @@ Two-card prefill (2026-10-22, 100 W cap until the PSU swap): `JI_TP=2 JI_JPF=1 J
 prefill, sparse attention with 128-key pages, exchange queue, BK16 GEMMs). 100 W: fresh 7.2k prompt 555 t/s warm
 (507 first after start; graph path 484 at 145 W), 4096-token ubatch 630, restored 72k ~395, steady 247k ubatch 467.
 KL unchanged (0.0003-0.0007 vs full attention at 130k / 261k). Fixed TP2 sparse decode metadata (KL 0.04 -> 0.0004).
-Both GPUs are power-bound at 100 W. Open toward 1000 t/s: EXL3 GEMM efficiency (~45 % of peak; 64 VGPR, 4 waves /
+Both GPUs are power-bound at 100 W (80 W: 488 t/s vs 629 - throughput ~ watts; see the 2026-10-22 list results
+in the log: work/energy cuts only). Open toward 1000 t/s: EXL3 GEMM efficiency (~45 % of peak; 64 VGPR, 4 waves /
 SIMD, no spills - barrier / LDS-latency bound: double-buffered LDS), TP overhead (~1.1 s of GEMM + ~1.8 s on the helper
 not attributed per ubatch), JI_PF_NMB=4 fails. Re-measure everything at 145 W after the PSU swap. Prefill tests at
 depth: `~/jt/dpb.py N [extra]` (saved KV; the first ubatch after a restore copies the helper's kv head).
