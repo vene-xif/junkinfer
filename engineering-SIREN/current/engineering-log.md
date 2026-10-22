@@ -1578,3 +1578,24 @@ Speeds at the start of the list: decode ~53 t/s short (55 without the prefill ma
    energy of the f32 FMAs; latency / occupancy / LDS rewrites cannot pay at 100 W (only at 145 W).
 Final state of the list (100 W): prefill fresh 7.2k 557 warm / 545 first, 4096-token ubatch ~630, steady 247k 477,
 decode 53-54 t/s short, 44 at 64k.
+
+## 2026-10-23 Tasks 1-2: prompt-cache reuse, chat-turn latency, small prompts (100 W)
+
+Measured with ~/jt/turns.py (2k-token system prompt, short user turns, streamed; TTFT and server timings).
+- Prefix reuse worked (only the new ~20 tokens processed), but a turn took 2.2 s: the new tokens are a small batch
+  (graph path: MoE on the CPU below 32 tokens) and the server makes 2-3 context checkpoints per turn (recurrent state,
+  63 MiB each: TP2 state out 45 ms + 155 ms state read + 37 ms state in + 58 ms buffer allocation).
+- Now ~0.45 s per turn (engine 96cb9b42d): small batches (<= 64) as 4-token JDE decode steps; checkpoints ~75 ms
+  (batched state read, TP2 split kept after a read, huge-page buffers, recycled buffers), 2 per turn instead of 3.
+- Every prompt also ended with a small chunk (the server's checkpoint 4 tokens before the end): 18 tokens took 1.6 s
+  on the graph path; now ~50 ms.
+- Medium batches (the previous reply re-processed each turn - Qwen's template strips reasoning, and the model may
+  emit an empty think block that the history drops): TP prefill from 64 tokens; ~1.4 s floor at 64-200 tokens
+  (rank 0 MoE: cold experts with 1-2 tokens each still cost a full tile) - the few-token EXL3 kernel (task 3) is the fix.
+- Quality fixes found on the way: the helper's sparse-decode metadata after a TP prefill was rebuilt with stale
+  params / mask (first sparse decode steps after a prefill wrong); the f16 all-reduce cost KL 0.0009 vs 0.0004 single
+  GPU - 24-bit exchange (default) 0.00023 for -3.5 % prefill.
+- First reply after a long prompt decodes slower for ~1.5 s (54 -> 23 ms per token): not the expert cache (seeded now,
+  3643 slots at warm-up) - decode runs near the 100 W cap too; most likely the power limiter's averaging. Left.
+- smoke_api.py: all pass (chat, tool call, finish_reason, prefix cache 6689 -> 23 new tokens, 12.9 -> 1.0 s).
+  api_suite.py needs `pip install openai anthropic` (not installed on AUX1 / CHERRY: download pending permission).
