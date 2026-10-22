@@ -1547,3 +1547,14 @@ queue timestamp at issue) and skip experiments (JI_PF_SKIP, JI_PF_NOUP) corrupt 
 - 9d90eb2e5: q / k / v and shared gate / up stage inputs together (neutral). Fresh prompts (cache off, 100 W): 7.2k
   507 first / 555 warm, 33k 466 average. TP GEMM split per rank (dense / routed, s): 2.54 / 2.59 and 2.10 / 1.49;
   single card 4.14 / 3.47. pf_mm stats (RADV_DEBUG=shaderstats): 64 VGPRs, 13 KiB LDS, 4 waves per SIMD, no spill.
+
+## 2026-10-22 (later) Prefill optimisation list, items 1-2 (100 W)
+
+Speeds at the start of the list: decode ~53 t/s short (55 without the prefill margin), prefill fresh 7.2k 557 warm /
+507 first after start, steady 247k ubatch 467.
+1. Warm-up (2b8c079e5): with JI_JPF, a 512-token batch then a decode step (the first prompt's tail decode set up
+   JDE's elastic expert slots, ~1 s). First prompt after start 507 -> 545 t/s (warm 557). Full-ubatch warm-up: no gain.
+2. Dense prompt tail (last 4096 positions dense on layers 3 / 7 / 11): a sparse tail budget (JI_SPF_TAIL_BUDGET
+   16k / 32k, local 16k) makes the tail ubatch at 247k 18.5 -> 9.7 / 10.4 s but KL at 261k 0.00069 -> 0.00146 /
+   0.00149 (~ no dense tail, 0.00159). Kept dense. JI_SPF_DENSE_TAIL=2048 not measurable with kl.sh (scored positions
+   follow the saved prefix and are always in the tail); not changed.
