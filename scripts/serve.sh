@@ -58,7 +58,7 @@ elif [ "${JI_TP:-0}" != 0 ]; then
   # card as in single-card mode; prefill = single card. JI_TP_HOT = routing counts file, JI_TP_FRAC = share of
   # the routing traffic the x4 card takes (TP=2 default 0.7, TP=1 1.0), JI_TP_SLOTS = cap. JI_TP_DUP (TP=2, default
   # 0.25): share of the traffic held by both cards (per-token balance). Validated: API suite 45/45, 117k needle.
-  # Not yet with --spec-type draft-mtp (the draft context on the x4 card hangs the first sync); ngram specs work.
+  # MTP speculative decoding: JI_MTP=1 (below).
   JI_GPU=all
   export JI_TP GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
   export JI_TP_HOT=${JI_TP_HOT:-$(cd "$(dirname "$0")/.." && pwd)/ref/tp/tp_hot_qwen36_exl3.bin}
@@ -78,18 +78,36 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
   # --load-mode none puts the CPU experts in pinned host memory, so op-offload uploads are async DMA instead of
   # staged synchronous copies (prefill +35%). Needs a GTT limit above the expert size: the kernel default is half
   # of RAM (16 GB on AUX-1); AUX-1 boots with ttm.pages_limit=6291456 amdgpu.gttsize=24576 (24 GB).
-  export JI_DECODE=1 JI_CACHE_MIB=${JI_CACHE_MIB:-auto} JI_CACHE_SWAPS=${JI_CACHE_SWAPS:-2}
+  # JI_CACHE_SWAPS: expert-cache evictions per token (2026-10-22: 2 -> 16, decode +4-14 %: the cache adapts to a
+  # conversation's experts within a few tokens instead of hundreds)
+  export JI_DECODE=1 JI_CACHE_MIB=${JI_CACHE_MIB:-auto} JI_CACHE_SWAPS=${JI_CACHE_SWAPS:-16}
   UB=${JI_UBATCH:-4096}
   # JI_SLOT_DIR: enables slot save/restore (POST /slots/0?action=save|restore {"filename": ...}) - a prefilled deep
   # context can be kept on disk and restored in seconds instead of minutes of prefill
   SLOT_ARGS=()
   [ -n "${JI_SLOT_DIR:-}" ] && SLOT_ARGS=(--slot-save-path "$JI_SLOT_DIR")
+  # JI_MTP=1 (JI_TP=2) - EXPERIMENTAL, KNOWN BUG (2026-10-22): after a deep context (a 64k restore + 7.5k prefill, or a
+  # 20k prompt), the following prompts can decode as garbage with MTP on (the target itself; without MTP the same
+  # sequence is correct). Not for production until fixed.
+  # MTP speculative decoding - the sidecar's draft head runs in JDE on the x4 card (CPU-loaded
+  # sidecar, copied to that card's VRAM), one draft token, drafted only when its probability >= JI_MTP_PMIN (0.5),
+  # HyperQwen's 40,960-token profiled draft vocabulary, IQ4_NL head. Lossless (greedy outputs identical).
+  # 2026-10-22, 600-token replies: +9-17 % decode (rewrite 38.3 -> 43.9, story 47.5 -> 51.8, explain 44.7 -> 52.7);
+  # prefill -10 % at 72k (the head's prompt catch-up, JI_MTP_PF_WIN=512 positions per prompt ubatch).
+  # Needs JI_TP_MARGIN_MIB=1900 on the x4 card (the head + its K/V).
+  MTP_ARGS=()
+  if [ "${JI_MTP:-0}" != 0 ]; then
+    REF=$(cd "$(dirname "$0")/.." && pwd)/ref/mtp
+    export JI_MTP_VOCAB_FILE=${JI_MTP_VOCAB_FILE:-$REF/hyperqwen_draft_vocab_40960.json} JI_MTP_HEAD_TYPE=${JI_MTP_HEAD_TYPE:-iq4_nl}
+    MTP_ARGS=(-md "${JI_MTP_MODEL:-$(dirname "$MODEL")/mtp-IQ4_NL.v2.gguf}" --spec-type draft-mtp -ngld 0 -devd none
+              --no-spec-draft-backend-sampling --spec-draft-n-max 1 --spec-draft-p-min "${JI_MTP_PMIN:-0.5}")
+  fi
   exec "$ENGINE/llama-server" -m "$MODEL" \
     -ngl 99 "${EXPERT_ARGS[@]}" --no-repack --load-mode none -fa on --fit off \
     -c "${JI_CTX:-262144}" -ctk q8_0 -ctv q8_0 \
     -np 1 --jinja -t "${JI_THREADS:-6}" -b "$UB" -ub "$UB" \
     --host "${JI_HOST:-127.0.0.1}" --port "${JI_PORT:-8080}" \
-    "${SLOT_ARGS[@]}" "${API_ARGS[@]}" "$@"
+    "${SLOT_ARGS[@]}" "${MTP_ARGS[@]}" "${API_ARGS[@]}" "$@"
 fi
 # JI_ENGINE=ggml: tuned mainline llama.cpp Vulkan path (MVP v0), q8_0 KV, full 262k context
 exec "$ENGINE/llama-server" -m "$MODEL" \

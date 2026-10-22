@@ -1599,3 +1599,46 @@ Measured with ~/jt/turns.py (2k-token system prompt, short user turns, streamed;
   3643 slots at warm-up) - decode runs near the 100 W cap too; most likely the power limiter's averaging. Left.
 - smoke_api.py: all pass (chat, tool call, finish_reason, prefix cache 6689 -> 23 new tokens, 12.9 -> 1.0 s).
   api_suite.py needs `pip install openai anthropic` (not installed on AUX1 / CHERRY: download pending permission).
+
+## 2026-10-23 Tasks 3-4: MTP overhead, expert-cache fixes, KVarN-6 start (100 W)
+
+**Gains (TP2, spectest 600-token replies, outputs identical to before):** decode with `JI_CACHE_SWAPS=16`
+(new default, was 2): rewrite / story / explain 34.9-38.7 -> 39.8-41.1 / 42.8-48.0 -> 47.4-49.0 / 44.7-45.1 t/s
+(fresh server; 245k decode after a restore 24.1 -> 30.6 first reply, 30.9 -> 33.2 steady). MTP (opt-in, see bugs):
+38.3 / 47.5 / 44.7 -> 43.9 / 51.8 / 52.7 t/s. Prefill unchanged without MTP (64k +7.5k: 388 t/s).
+
+Correctness fixes (all in production):
+- KV clear wiped the seeded KV-tail expert slots (`llama_kv_cache::clear(data)` zeroes the buffers; the bulk seed
+  ran right before the warm-up's clears): garbage output at the production margin. `jde_note_kv_clear` + guard
+  drop / re-seed; JI_EL_VERIFY 5280 mismatches -> 0.
+- `jde_kv_guard` read the KV context's n_kv before the ubatch was applied (uninitialized on the first ubatch of a
+  decode call): a garbage 1.4e9 evicted every KV-tail slot (a run at 2/3 speed). Limit = used cells + n_tokens + 4096.
+- TP2 relay watchdog 2 s -> 20 s (`JI_TP_TIMEOUT_MS`): the first decode step after a deep restore + prefill took
+  > 2 s, which switched tensor parallelism off for the server's lifetime (and computed that token wrong).
+- A larger reallocated compute buffer keeps its 1834 elastic slots (re-bound, refilled) instead of retiring them
+  (the MTP context's first verify reallocates it: verify misses 3-4x).
+
+MTP work (engine be2f7bf3d, 3153cf5ce): verify cost profile (primary card, 1/2/3-token steps 17.5 / 25.0 / 36.4 ms
+GPU; routed experts scale per (token, expert) pair, the TP sync per token); per-step host overhead found and cut
+(spec_prof: JI_SPEC_PROF=N): one fused draft decode per step (catch-up deferred), repeated draft row skipped, head
+only for the output row, greedy top-10 straight from the logits, no 3 MB sampler clone per step. Draft p-min 0.5
+best (n=2 drafts lose). Head: HyperQwen's profiled 40,960-token vocabulary (JI_MTP_VOCAB_FILE,
+ref/mtp/hyperqwen_draft_vocab_40960.json, Apache-2.0) + IQ4_NL requant (JI_MTP_HEAD_TYPE) - equal to the first-64k
+IQ4_NL head within noise, both beat Q6_K. Prompt catch-up windowed (JI_MTP_PF_WIN=512): MTP prefill cost at 72k
+-39 % -> -10 %.
+
+Open bugs (not fixed, documented in serve.sh / open-paths):
+1. MTP: after a deep context (64k restore + 7.5k prefill, or a 20k prompt) the next prompts decode as garbage
+   (the target's tokens; drafts all rejected). Reproduces with every new MTP option off, so it predates this work;
+   without MTP the same sequence is correct. MTP stays opt-in (JI_MTP=1), off in production.
+2. Decode ~20-25 % slower after any large prefill (>= ~5k tokens), until the server restarts: story 47-49 -> 34-37
+   t/s, with swaps 2 and 16 alike (pre-existing). Diagnosis so far: identical kernel times and cache hit rate
+   (96-97 %), but the primary's step starts 3.6-7 ms (vs 1.2-1.6) after its submit - the expert-fill copies queued
+   ahead of it on the graphics queue run slower; not PCIe link state, clocks, RAM pressure, CPU threads or GTT.
+
+KVarN-6 (task 4, started): in-place design - 6-bit tile records (128 cells x 2 slices, 52 words/cell + axes in the
+same tile block) in the layer's K/V buffers, an exact q8_0 window ring for the newest cells, kvr_seal (window ->
+records, the validated KVSIM arithmetic) and attn_hmr (decode attention over records + window, per key, merged by
+attn_merge as before). Test harness JI_ATTN_TEST=n JI_ATTN_KVR2=1; not yet run. Remaining: prefill readers
+(pf_fa / pf_fa_sparse / pf_pmeta), TP2 mirror source, elastic-slot accounting, state save/restore (q8 rows out,
+ingest in), truncation (unseal), KL gate.

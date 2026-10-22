@@ -25,6 +25,14 @@ Targets (dev box AUX-1; see README for the table):
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
+## Resume point (2026-10-23)
+
+Production: `scripts/serve_prod.sh` (TP2, JDE prefill, JI_CACHE_SWAPS=16, no MTP), smoke_api ALL PASS. Fresh server
+decode ~40-49 t/s short (600-token replies), prefill ~555 t/s (6.7k) / 388 t/s at 72k. Open: (1) decode -20-25 %
+after any large prefill until restart (pre-existing; queued expert-fill copies run slower - see engineering log
+2026-10-23); (2) MTP garbage after a deep context (MTP opt-in only); (3) KVarN-6: kernels written
+(kvr_seal, attn_hmr + harness), integration pending; (4) MTP prefill cost -10 %.
+
 ## Resume point (2026-10-21, two RX 580s)
 
 AUX-1: Vulkan1 = x16 card, Vulkan0 = chipset x4 card. Best dual mode: `JI_TP=2 scripts/serve.sh` (engine c4f8da270+):
