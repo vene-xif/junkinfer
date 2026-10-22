@@ -54,6 +54,13 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 | 25 | Lossless grouped verify (one read per distinct expert across verified tokens) | TRIED (JI_X3_GROUP): not faster - LDS occupancy, 16-30 % duplicates | speculation becomes profitable | MoE kernel rework |
 | 26 | DuoAttention-style per-head retrieval / streaming classes for the 160 attention heads | OPEN | lower budgets on streaming heads | calibration + per-head budgets |
 
+### Deferred by the user (2026-10-22): EXL3 GEMM kernel rewrite
+TODO, to be approached differently later. pf_mm / mul_mm_gcn_exl3 run at ~45 % of FP32 peak (prefill: dense ~2.4
+TFLOP/s per card at 100 W); the user estimates ~50 % headroom. Measured so far (do not repeat blindly): BK16 +7 % (in),
+T128, BN128 (+BK16), 256-thread 8x8 / 8x4 register tiles (JI_PF_DV / JI_PF_IV) neutral or slower; occupancy 64 VGPR /
+13 KiB LDS / 4 waves per SIMD, no spills. At the 100 W cap prefill is power-bound (80 W: 488 t/s vs 100 W: 629), so a
+rewrite has to cut instructions / energy per FMA, not only stalls.
+
 ## Tier 3 - needs a quantization GPU (VENE, deferred by user) or re-quantization
 
 | # | Path | Expected gain |
