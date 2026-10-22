@@ -1536,3 +1536,11 @@ queue timestamp at issue) and skip experiments (JI_PF_SKIP, JI_PF_NOUP) corrupt 
   f32mm 0.29 / 0.78, FA 0.82 / 0.97, GDN rule 0.51 / ~0.6, prep 0.27 / 0.40. Single JDE 428 t/s (graph 342 at 2k);
   TP 624 = 1.46x. TP at single-card efficiency would be ~856 t/s at 100 W (~960 at 145 W).
 - pf_f32mv (wave per token for N <= 64): slower (register array), opt-in only.
+- Steady depth (042aa9abd notes): 247k ubatch after the first 467 t/s at 100 W; the first ubatch after a slot
+  restore copies the helper's kv head (~1.3 GB over x4), so dpb's depth figures understate steady prefill.
+- Neutral / rejected at 100 W: T128 GEMM variants (slower), BN128 + BK16 dense (=), sparse budget 4096 (no gain:
+  the exact part is not dominant), tail estimate off (+6 %, not taken), CP DMA exchange on the helper's graphics
+  queue (=), per-segment host barrier (=), pf_f32mv (slower). Busy times under the cap depend on idle gaps (clock
+  boost), so only wall time compares configurations.
+- c2b093a56: pipelines at init (first prompt 466 -> 501), helper scratch sized once, rank 0 uploads only its
+  experts (pf_copyr run table; neutral). Warm restored 2k + 5.5k: 557 t/s.
