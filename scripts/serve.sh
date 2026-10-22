@@ -28,6 +28,11 @@ shift || true
 
 # client-facing options shared by both engines
 API_ARGS=(--alias "${JI_ALIAS:-qwen3.6-35b-a3b}" --cache-ram "${JI_CACHE_RAM:-8192}")
+# chat template: JI_CHAT_TEMPLATE (default: Qwen-Sharp, ref/templates/qwen_sharp.jinja - peculiar-ragdoll/Qwen-Sharp-
+# Chat-Templates; fetch: curl -L -o ref/templates/qwen_sharp.jinja https://huggingface.co/peculiar-ragdoll/Qwen-Sharp-Chat-Templates/resolve/main/chat_template.jinja
+# - agents such as Hermes got tool calls as plain text with the GGUF's embedded template). JI_CHAT_TEMPLATE=embedded: the GGUF's own
+CT=${JI_CHAT_TEMPLATE:-$(cd "$(dirname "$0")/.." && pwd)/ref/templates/qwen_sharp.jinja}
+[ "$CT" != embedded ] && [ -f "$CT" ] && API_ARGS+=(--chat-template-file "$CT")
 [ -n "${JI_API_KEY:-}" ] && API_ARGS+=(--api-key "$JI_API_KEY")
 case "${JI_THINKING:-on}" in
   off|0|false|no) API_ARGS+=(--reasoning off) ;;
