@@ -45,3 +45,6 @@ before the raw-basis page statistics and the exact prompt tail, 2026-10-19).
 The q8_0-KV figure was used only as a yardstick for "tiny". Sparse decode and prefill are on by default by user
 decision (not free, worth the cost: +44 % decode at 245k, +8 % at 72k, +30 % prefill at 80k, ~2.4x at 262k). Still owed: KL of
 EXL3 4.0 bpw vs BF16 (needs a reference GPU), the denominator for judging these terms.
+2026-10-22: JDE prefill's sparse attention uses 128-key statistics pages (JI_PF_SUB=128): KL at 261k with the tail
+prefilled 0.00069 (= 32-key pages); with every layer sparse 0.00145 -> 0.00159. TP2 sparse decode before engine
+63d680059 read wrong page metadata (KL 0.04 at 130k): TP2 depth quality figures before that commit are invalid.

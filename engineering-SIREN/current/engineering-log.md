@@ -1529,3 +1529,10 @@ queue timestamp at issue) and skip experiments (JI_PF_SKIP, JI_PF_NOUP) corrupt 
   compute queue), helper prefill on a compute queue, rank-0 weighting of the expert split.
 - Both GPUs now ~6.3-6.4 s busy per 4096 tokens; next: GEMM efficiency (dense ~40 % of peak), f32mm small-N kernels,
   rank 0's upload stream (~0.4 s), cold-expert tiles.
+- Depth (032e3f39d): pf_fa_sparse is ~half of a 245k ubatch (4.0 / 4.9 s per rank for 3443 tokens); page scoring
+  ~1/3 of it (JI_PF_SPNS timing variant). 128-key statistics pages: steady 245k ubatch 279 -> 350 t/s; KL at 261k
+  unchanged in the production setting, +0.00014 with every layer sparse. Restored + tail: 2k 465, 72k 394, 247k 265.
+- Single vs TP (4096-token ubatch, family costs, single / TP both ranks, s): dense 4.14 / ~4.8, routed 3.47 / ~4.2,
+  f32mm 0.29 / 0.78, FA 0.82 / 0.97, GDN rule 0.51 / ~0.6, prep 0.27 / 0.40. Single JDE 428 t/s (graph 342 at 2k);
+  TP 624 = 1.46x. TP at single-card efficiency would be ~856 t/s at 100 W (~960 at 145 W).
+- pf_f32mv (wave per token for N <= 64): slower (register array), opt-in only.
