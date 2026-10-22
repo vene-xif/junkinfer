@@ -1558,3 +1558,10 @@ Speeds at the start of the list: decode ~53 t/s short (55 without the prefill ma
    16k / 32k, local 16k) makes the tail ubatch at 247k 18.5 -> 9.7 / 10.4 s but KL at 261k 0.00069 -> 0.00146 /
    0.00149 (~ no dense tail, 0.00159). Kept dense. JI_SPF_DENSE_TAIL=2048 not measurable with kl.sh (scored positions
    follow the saved prefix and are always in the tail); not changed.
+3. (Moved after 4.) 4. Rank 1 diagnosis: skipping any single mixer kernel on the helper (JI_TP_SKIP) cut its mixer
+   busy by 140-970 ms - non-additive (sum > the whole overhead): no hidden work; clocks equal (1182 vs 1195 MHz, both
+   ~98 W). Under the cap both GPUs are power-bound and wall time follows total work: the expert split (TPW 0.3 / 0.5 /
+   all shared experts to rank 1) is neutral. Consequence: balance / latency items (3 for prefill, 5, 7) are not
+   expected to pay at 100 W; work reduction (9, 10) is.
+5. Split exchange queues (JI_PF_X2): 614 vs 628, opt-in. 6. Router once: rejected (a sync point inside the MoE);
+   small-N f32 kernels: latency, not energy - not pursued; NMB=4 fixed (command buffers): 586 t/s, 3: 598, 2 stays.
