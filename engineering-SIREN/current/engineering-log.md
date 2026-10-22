@@ -1510,3 +1510,22 @@ seconds instead of 4-15 min per point.
   (debug: helper head dense), ~/jt/dpb.py, ~/jt/gpustress, dualstress.sh, pwrlog.sh; kl.sh KLX=extra args.
 - Failure handling: a failing rank stops submitting (J.fail), the relay polls and the main thread signals the peers'
   remaining semaphore values so the other rank cannot hang.
+
+## 2026-10-22 JDE TP prefill: exchange queue, profiling method, GEMM fixes (100 W cap)
+
+Method: JI_PF_TL=1 (per-GPU segment timeline: busy vs waiting) + JI_PF_REP=prefix:N (a kernel family's cost = busy
+increase per extra issue; data unchanged). JI_PF_GPROF per-label times are misattributed (RADV writes a compute-
+queue timestamp at issue) and skip experiments (JI_PF_SKIP, JI_PF_NOUP) corrupt activations -> routing -> MoE cost.
+- Exchange copies moved to their own queue (dd453f436): rank 1 idle 0.8-1.1 s -> ~0.1 s; 518 -> 554 t/s per
+  4096-token ubatch. 2 copy workgroups instead of 8: 584 (the copy waves held CUs while waiting on the x4 link).
+- Per-family cost (4096 tokens, rank 0 / rank 1, ms): dense GEMM ~2620 / 2500, routed GEMM 3131 / 1526, FA 434 / 536,
+  GDN rule ~300 (noisy), f32mm 320 / 462 (GDN alpha/beta ~170 each), prep ~200, the rest small.
+- Rank 0's routed GEMM: 277 tiles per layer and micro-batch vs 122 on rank 1 at the same cost per tile (~140 us):
+  cold experts get ~26 tokens per micro-batch and a 64-column tile multiplies all 64. Half-width tiles for <= 32-row
+  remainders: rank 0 MoE 3.84 -> 3.48 s. Whole experts per rank (instead of per-token splitting): neutral.
+- BK16 on the JDE GEMM variants (the graph path had it, JDE's copies not): 584 -> 624 t/s.
+- Prefill t/s (restored context + tail): 2k 406 -> 462, 72k 304 -> 373, 247k 213 -> 229 (1beee0ea2).
+- Rejected / neutral: CP-DMA exchange copies (CU-free, but 4 KiB packets too slow over x4; on rank 0 they slowed its
+  compute queue), helper prefill on a compute queue, rank-0 weighting of the expert split.
+- Both GPUs now ~6.3-6.4 s busy per 4096 tokens; next: GEMM efficiency (dense ~40 % of peak), f32mm small-N kernels,
+  rank 0's upload stream (~0.4 s), cold-expert tiles.
