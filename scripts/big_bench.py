@@ -21,7 +21,7 @@ if frozen:
     else: open(frozen, "w").write(text)
 body = {"messages": [{"role": "user", "content": text + "\n\nIn two sentences, what is this code base?"}],
         "max_tokens": n_gen, "temperature": 0.0, "cache_prompt": cache, "chat_template_kwargs": {"enable_thinking": False},
-        "ignore_eos": bool(os.environ.get("JI_IGNORE_EOS"))}   # JI_IGNORE_EOS=1: always n_gen tokens (speed comparisons)
+        "ignore_eos": os.environ.get("JI_IGNORE_EOS", "1") != "0"}   # always n_gen tokens (speed comparisons; JI_IGNORE_EOS=0: stop at EOS)
 req = urllib.request.Request("http://127.0.0.1:8080/v1/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
 with urllib.request.urlopen(req, timeout=10800) as r:
     d = json.loads(r.read()); t = d["timings"]

@@ -7,7 +7,7 @@ usage: depth_bench.py [approx_prompt_tokens=30000] [gen_tokens=128] [base_url] [
 import glob, json, sys, urllib.request
 
 n_tok = int(sys.argv[1]) if len(sys.argv) > 1 else 30000
-n_gen = int(sys.argv[2]) if len(sys.argv) > 2 else 128
+n_gen = int(sys.argv[2]) if len(sys.argv) > 2 else 1024
 base = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8080"
 
 text = ""
@@ -17,7 +17,8 @@ for p in sorted(glob.glob("engine/docs/**/*.md", recursive=True)):
         break
 text = text[: n_tok * 4]
 body = {"messages": [{"role": "user", "content": text + "\n\nSummarise the documents above in a few paragraphs."}],
-        "max_tokens": n_gen, "temperature": float(__import__("os").environ.get("JI_TEMP", "0.7")), "chat_template_kwargs": {"enable_thinking": False}}
+        "max_tokens": n_gen, "temperature": float(__import__("os").environ.get("JI_TEMP", "0.7")), "chat_template_kwargs": {"enable_thinking": False},
+        "ignore_eos": __import__("os").environ.get("JI_IGNORE_EOS", "1") != "0"}   # speed runs: always n_gen tokens (JI_IGNORE_EOS=0: stop at EOS)
 if len(sys.argv) > 5 and sys.argv[5] == "nocache":
     body["cache_prompt"] = False
 req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
