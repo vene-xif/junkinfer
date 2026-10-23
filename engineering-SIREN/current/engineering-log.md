@@ -1675,3 +1675,32 @@ MTP -2-4 % fresh (17k 489 vs ~500; 6.8k 532 vs ~555), -6 % for 7.5k on a 72k con
 4. MTP prefill cost: the draft head attended all cells up to the position (~7 ms per call at 72k) -> last 8192 cells
    (offset bindings, JI_MTP_ATT_WIN); prompt catch-up 512 -> 128 rows. Spec process per 4k chunk at 72k 0.9 -> ~0.15 s.
 Kernel note: a refcount underflow warning in amdgpu_job_free (amdgpu_cs_ioctl, 2026-10-22 19:25) - driver bug, once.
+
+## 2026-10-23 (afternoon) KVarN state hooks, two box freezes, and corrupt KL references (graph path, 3.75 GiB blocks)
+
+**Gains: none in t/s (correctness work). KVarN-6 decode at q8 speed (short 42.1 / 49.1 / 47.3 vs 43.2 / 49.6 / 48.0;
+36k restore 37.6 vs 36.3; 247k prefill 432 t/s, decode 38.0) - quality gate re-run pending on the v2 references.**
+
+1. KVarN-6 rings allocated at engine init, before the expert cache budget (late allocation over-committed VRAM:
+   ~1.4 GB evicted to GTT, decode 3-4x slower).
+2. KVarN state hooks never matched (llama passes *views* of the cache tensors) and were bound only at the first
+   decode: every save / restore / prompt-cache reuse wrote raw q8_0 rows over the records. Fixed (view_src match,
+   `jde_kv_attach` right after the memory exists; `JI_KVR_TRACE=1` logs bypassed rows).
+3. Two hard freezes of AUX1. dmesg of the second: ring gfx timeout in llama-junk-ref (killed mid-step) -> BACO reset
+   -> "atombios stuck ... asic atom init failed" -> GPU Recovery Failed -> box freeze. TP2 GPUs wait in-queue on
+   host-set VkEvents; a process that ends mid-step leaves them waiting. Engine 2c61614d3 / e8da5430d: every TP event
+   is set before abort() (TP loss), at teardown and from SIGTERM/INT/HUP/ABRT/SEGV/BUS/FPE (jde_signal.cpp). Not yet
+   tested by a deliberate kill (a failure costs a power cycle).
+4. **The ggml graph path loses the first attention layer's K/V writes** when GGML_VK_SUBALLOCATION_BLOCK_SIZE is
+   3.75 GiB (serve.sh / kl.sh / mkrefs.sh since 2026-10-18) and ubatch 4096: after a 36k prompt, layer 3's K and V
+   are all-zero for 20480-24576 cells (whole ubatches from ~8k). Not the case with 1 GiB blocks, ubatch 2048, or
+   upstream llama.cpp; also with IQ4_NL weights, JI_KV_HM=0, JI_DECODE off, fusion / graph optimiser off, before
+   the sched view-copy dedupe. Most likely an offset >= 2 GiB inside the 2.75 GiB compute buffer is mis-addressed by
+   some ggml-vulkan op (device limits allow 4 GiB). The JDE prefill (JI_JPF=1, production since 2026-10-21) writes
+   KV itself and is clean, so production output since 10-21 is unaffected; graph-path prefill between 10-18 and
+   10-21 was degraded on long prompts.
+   Consequence: **all v1 KL references (~/jt/*_full.jref) and cached prefix states (/mnt/ssd/kvcache/jref) are
+   corrupt past ~8k tokens**, and every depth KL number since 10-18 (sparse attention gates, campaign 32k / 64k)
+   was measured against them. A JDE-prefilled 32k prefix scored KL 0.13 against the v1 reference only because the
+   reference was wrong. v2 references and states (1 GiB blocks): ~/jt/*_v2.jref, jref_v2/, kl_v2.sh; all gates to be
+   re-run on them.

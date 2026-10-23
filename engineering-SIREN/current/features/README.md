@@ -10,8 +10,8 @@ chronological record stays in `../engineering-log.md`; these documents are the s
 | Expert memory hierarchy (pinned host, VRAM cache, elastic slots, TP2 balance) | [expert-cache.md](expert-cache.md) | default on |
 | MTP speculative decoding (draft head on the helper GPU) | [mtp-speculative-decoding.md](mtp-speculative-decoding.md) | default on |
 | KVarN-6 KV cache (in place) | [kvarn6-kv-cache.md](kvarn6-kv-cache.md) | opt-in, gate pending |
-| JDE decode engine (replayed programs, fused kernels, EXL3 mat-vecs) | ../decode-engine.md (to be rewritten as built) | default on |
-| Tensor-parallel decode / prefill on two GPUs | ../dual-card-design.md, ../tp-prefill-design.md (to be merged here) | default on |
+| JDE decode engine (one-shot tokens, fused kernels, EXL3 mat-vecs) | [jde-decode-engine.md](jde-decode-engine.md) | default on |
+| Tensor-parallel decode / prefill on two GPUs | [tensor-parallel-two-gpus.md](tensor-parallel-two-gpus.md) | production |
 | EXL3 kernels (trellis decode, stripe-major mat-vecs, GEMMs) | ../exl3-support.md (to be extended) | default on |
 | Prompt reuse, small prompts, server / supervisor | to write | default on |
 | Host / system tuning (DPM, governor, GTT, power cap) | ../physics.md + to write | — |
