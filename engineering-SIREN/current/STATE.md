@@ -25,13 +25,13 @@ Targets (dev box AUX-1; see README for the table):
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
-## Resume point (2026-10-23)
+## Resume point (2026-10-23, later)
 
-Production: `scripts/serve_prod.sh` (TP2, JDE prefill, JI_CACHE_SWAPS=16, no MTP), smoke_api ALL PASS. Fresh server
-decode ~40-49 t/s short (600-token replies), prefill ~555 t/s (6.7k) / 388 t/s at 72k. Open: (1) decode -20-25 %
-after any large prefill until restart (pre-existing; queued expert-fill copies run slower - see engineering log
-2026-10-23); (2) MTP garbage after a deep context (MTP opt-in only); (3) KVarN-6: kernels written
-(kvr_seal, attn_hmr + harness), integration pending; (4) MTP prefill cost -10 %.
+Production: `scripts/serve_prod.sh` = TP2 + JDE prefill + MTP (JI_MTP=1, margin 1900) + JI_CACHE_SWAPS=16 + Qwen-Sharp
+template + supervisor (auto-restart) + CPU governor performance (needs `scripts/cpu_performance.sh install` once
+for reboots). Fresh decode 49-59 t/s (600-token replies), prefill ~530 t/s (6.8k), 375 t/s for 7.5k at 72k.
+Fixed today: post-prefill slowdown (governor), MTP garbage after restore + prefill, TP-loss crash path.
+Next: KVarN-6 integration (kernels kvr_seal / attn_hmr + harness written, JI_ATTN_TEST=n JI_ATTN_KVR2=1).
 
 ## Resume point (2026-10-21, two RX 580s)
 

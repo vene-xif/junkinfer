@@ -26,7 +26,11 @@ if [ "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)" 
     || echo "note: CPU governor is not 'performance' (decode -6-9 %): run scripts/cpu_performance.sh install"
 fi
 export JI_HOST=${JI_HOST:-0.0.0.0} JI_PORT=${JI_PORT:-8080}
-export JI_TP=2 JI_JPF=1 JI_TP_MARGIN_MIB=${JI_TP_MARGIN_MIB:-1500}
+# MTP speculative decoding on by default (JI_MTP=0: off; decode +14-23 %, prefill -2-6 %); its head needs a larger
+# helper margin
+export JI_MTP=${JI_MTP:-1}
+if [ "$JI_MTP" != 0 ]; then DEF_MARGIN=1900; else DEF_MARGIN=1500; fi
+export JI_TP=2 JI_JPF=1 JI_TP_MARGIN_MIB=${JI_TP_MARGIN_MIB:-$DEF_MARGIN}
 export JI_SLOT_DIR=${JI_SLOT_DIR:-/mnt/ssd/kvcache}
 MODEL=${MODEL:-/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf}
 mkdir -p logs

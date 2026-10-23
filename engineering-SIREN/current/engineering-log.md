@@ -1653,3 +1653,25 @@ ingest in), truncation (unseal), KL gate.
   post-prefill bugs above (decode slowdown after large prefills, MTP garbage after deep contexts): something left
   behind by a multi-ubatch JDE prefill breaks the next TP decode steps. Mitigation: serve_prod.sh runs a supervisor
   that restarts the server on exit (logs/restarts.log, logs/server.<time>.crash.log).
+
+## 2026-10-23 (morning) Bug fixes: post-prefill slowdown, MTP garbage, TP loss; MTP on by default
+
+**Gains (TP2, 100 W, spectest 600-token replies rewrite / story / explain, Qwen-Sharp template):** no MTP
+40.8 / 46.5 / 44.2 -> 43.2 / 49.6 / 48.0 t/s (CPU governor performance); MTP 49.4 / 58.5 / 58.9 t/s (production
+default now). After a 17k prompt (no MTP) 33.7 / 36.4 / 34.8 -> 40.2 / 44.4 / 43.8. Prefill unchanged without MTP;
+MTP -2-4 % fresh (17k 489 vs ~500; 6.8k 532 vs ~555), -6 % for 7.5k on a 72k context (375 vs 399).
+
+1. Decode slowdown after a large JDE prefill: not GPU state (kernel times equal; not thermal - a 35 s GPU stress made
+   decode faster; not VRAM eviction, PCIe link, THP / compaction). The host work between steps slowed (expert cache
+   update 1.1 -> 4.4 ms/token, fence->submit +2 ms): CPU cores down-clocked under the schedutil governor (avg 1825 vs
+   2628 MHz). Fix: governor performance (scripts/cpu_performance.sh; serve_prod.sh applies it with passwordless
+   sudo, else prints how). Also: asynchronous expert fills (own queue, slots published when copied) - neutral to +3 %.
+2. MTP garbage after a 64k restore + continuation prefill: compute-buffer expert slots above the prefill scratch got
+   corrupted (JI_EL_CB=0 / JI_PF_CBALL=1 cure it; the stray write is not identified). Fix: with nextn rows wanted
+   (MTP) the prefill evicts all compute-buffer slots. (Repro needs the restore to match: depth_64000.bin was saved
+   with the embedded template - JI_CHAT_TEMPLATE=embedded.)
+3. TP hang / crash (Hermes): not reproduced (campaign: 6 x 26k prompts). A lost TP2 step now aborts the process with a
+   message (supervisor restarts it) instead of the one-GPU fallback that crashed later.
+4. MTP prefill cost: the draft head attended all cells up to the position (~7 ms per call at 72k) -> last 8192 cells
+   (offset bindings, JI_MTP_ATT_WIN); prompt catch-up 512 -> 128 rows. Spec process per 4k chunk at 72k 0.9 -> ~0.15 s.
+Kernel note: a refcount underflow warning in amdgpu_job_free (amdgpu_cs_ioctl, 2026-10-22 19:25) - driver bug, once.

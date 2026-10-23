@@ -91,15 +91,12 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
   # context can be kept on disk and restored in seconds instead of minutes of prefill
   SLOT_ARGS=()
   [ -n "${JI_SLOT_DIR:-}" ] && SLOT_ARGS=(--slot-save-path "$JI_SLOT_DIR")
-  # JI_MTP=1 (JI_TP=2) - EXPERIMENTAL, KNOWN BUG (2026-10-22): after a deep context (a 64k restore + 7.5k prefill, or a
-  # 20k prompt), the following prompts can decode as garbage with MTP on (the target itself; without MTP the same
-  # sequence is correct). Not for production until fixed.
-  # MTP speculative decoding - the sidecar's draft head runs in JDE on the x4 card (CPU-loaded
-  # sidecar, copied to that card's VRAM), one draft token, drafted only when its probability >= JI_MTP_PMIN (0.5),
-  # HyperQwen's 40,960-token profiled draft vocabulary, IQ4_NL head. Lossless (greedy outputs identical).
-  # 2026-10-22, 600-token replies: +9-17 % decode (rewrite 38.3 -> 43.9, story 47.5 -> 51.8, explain 44.7 -> 52.7);
-  # prefill -10 % at 72k (the head's prompt catch-up, JI_MTP_PF_WIN=512 positions per prompt ubatch).
-  # Needs JI_TP_MARGIN_MIB=1900 on the x4 card (the head + its K/V).
+  # JI_MTP=1 (JI_TP=2; serve_prod.sh default): MTP speculative decoding - the sidecar's draft head runs in JDE on the
+  # x4 card (CPU-loaded sidecar, copied to that card's VRAM), one draft token, drafted when its probability >=
+  # JI_MTP_PMIN (0.5), HyperQwen's 40,960-token profiled draft vocabulary, IQ4_NL head, attention over the last 8192
+  # cells, prompt catch-up of the last 128 positions per ubatch. Lossless (greedy outputs identical).
+  # 2026-10-23 (governor performance), 600-token replies: rewrite 43.2 -> 49.4, story 49.6 -> 58.5, explain 48.0 ->
+  # 58.9 t/s; prefill -2-4 % fresh, -6 % for a 7.5k prompt on a 72k context. Needs JI_TP_MARGIN_MIB=1900.
   MTP_ARGS=()
   if [ "${JI_MTP:-0}" != 0 ]; then
     REF=$(cd "$(dirname "$0")/.." && pwd)/ref/mtp
