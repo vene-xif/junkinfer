@@ -2,7 +2,8 @@
 
 > Every known open lever, with status, expected gain, cost and blockers. Ordered by time/effort needed (smallest
 > first) within each tier. Update in place; results go to `engineering-log.md`, decisions to `candidate-ledger.md`.
-> Last update: 2026-10-20.
+> Last update: 2026-10-23. **All sparse-attention KL figures dated before 2026-10-23 were measured against corrupt
+> references (graph-path layer-3 KV loss, engineering log 2026-10-23 afternoon) and are void; v2 numbers below.**
 
 Current numbers (AUX-1, EXL3 4.0 bpw, q8_0 KV, sparse attention on): decode ~44 t/s short, ~35 at 72k, ~32 at
 100k, 29.4-30.0 at 245k; prefill ~450 t/s (7k), 305-319 t/s
@@ -24,6 +25,27 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 | 7 | `v_sad_u8` from GLSL (GL_EXT_integer_dot_product `dotPacked4x8EXT(x, 0x01010101)`) - does RADV/ACO lower it to sad / cheap ops on gfx803? | OPEN | mul1 decode ~20 % cheaper per weight | ISA dump of a test shader |
 | 8 | ~~srvpf decode 0.0 t/s~~ CLOSED: raw /completion on the docs prompt - the model predicts end-of-text after the document's last line (benign) | done | - | - |
 | 9 | JI_SP_NORM=2 LSE in attn_score instead of attn_topk (2-workgroup latency) | optional | makes NORM=2's -5 % KL nearly free | small shader change |
+
+## Sparse attention rework (2026-10-23, after the v2 references) - user priority: keep the speed, lose the loss
+
+Measured on v2 references (KL, TP2): default (16k keys, Gaussian tail) 64k 0.0028 / 100k 0.0066 / 130k 0.0115 / 261k
+0.0177; dense 0.0001-0.0002. Budget 32k / 64k / 128k at 261k: 0.0087 / 0.0036 / 0.0014. Tail diagnostics: no tail
+only slightly worse than the estimate; exact page mass + mean V *worse*; estimated mass + exact page values ~ default:
+both the mass and the value of the unselected pages matter. Dense attention over 4-bit KVarN-simulated KV: 0.002-0.0028.
+Sources for S1-S6: Gemini deep research 2026-10-23 (share link moGCmgy2EScs; its KL predictions are estimates and run
+~3x optimistic - measure everything).
+
+| # | Path | Status | Expected gain | Cost / risk |
+|---|---|---|---|---|
+| S0 | Speed per budget at 200k (dense / 16k / 64k / 128k) - the trade-off curve that frames everything below | RUNNING | decision data | none |
+| S1 | Monopole tail: drop the variance term (n exp(q.muK), JI_SP_BG=1); argument: the diagonal-variance term ignores intra-page key correlation and inflates unselected mass (Multipole Attention, Hooper et al. NeurIPS 2025) | QUEUED | KL, free | env knob |
+| S2 | Sub-page centroids: split each 32-key page into M = 2 (-4) k-means sub-clusters with own (muK, muV, n), monopole mass each - fixes value dilution (the unweighted page-mean V) inside the same ~1.5 KB/page | OPEN | KL (claimed large; unverified) | attn_meta (2-means on page completion), attn_bg/attn_score layout |
+| S3 | Error-bounded adaptive budget (Twilight top-p, Lin et al. NeurIPS 2025): select pages by descending estimated mass until p = 0.985-0.99 of the estimated total; dense fallback when that needs > ~25 % of the context; per KV head, per step | OPEN | KL bound on broad layers, keeps small budgets on peaked ones | topk -> cumulative-mass threshold (binary search on the score histogram); depends on S1/S2 for a usable mass estimate |
+| S4 | Two-tier precision tail: exact q8 for the selected pages, low-bit (4 / 3 / 2-bit) K and V for every other token (exact softmax formula, quantisation noise only on tail mass) instead of a statistical summary; variant: Gemini's zero-VRAM split of q8 K into hi4 / lo4 bit planes (hi4 scores all candidates, lo4 + V only for winners) | OPEN (bound being measured: dense 4-bit everywhere 0.002-0.0028, so a tier with exact top pages should land well below) | near-lossless with ~2x less attention traffic than dense at 4-bit tail | shadow low-bit KV (VRAM: ~670 MB at 2-bit, 262k) or a KV layout change (bit planes: every K reader changes) |
+| S5 | Stratified sampled correction of the tail (MagicPIG-style control variate): 32-64 unselected pages per KV head read exactly each step, their (exact - estimate) residual scaled up - unbiased tail | OPEN | KL (bias removal) | small extra reads; sampling RNG in shader |
+| S6 | Prefill: XAttention strided antidiagonal block scoring (Xu et al. ICML 2025) to replace the dense-prompt-tail crutch | OPEN, after decode | prefill KL / speed | new scoring pass |
+| S7 | Per-layer graded budgets on the v2 references (old JI_SP_LBUDGET verdict void) | OPEN | KL / speed balance | env knob |
+| S8 | Continuum Attention (arXiv 2610.20586): NOT applicable - a different attention operator trained from scratch (5M-param models), not an approximation of softmax | rejected | - | - |
 
 ## Tier 1 - days
 
