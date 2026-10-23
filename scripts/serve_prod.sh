@@ -20,6 +20,11 @@ fi
 old=$(ps -eo pid,args | grep "[b]in/llama-server -m " | awk '{print $1}' || true)
 if [ -n "$old" ]; then echo "stopping the running server ($old)"; kill $old; sleep 5; fi
 
+# CPU governor performance (decode +6-9 %, see scripts/cpu_performance.sh): applied when sudo needs no password
+if [ "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)" != performance ]; then
+  sudo -n sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g"; done' 2>/dev/null \
+    || echo "note: CPU governor is not 'performance' (decode -6-9 %): run scripts/cpu_performance.sh install"
+fi
 export JI_HOST=${JI_HOST:-0.0.0.0} JI_PORT=${JI_PORT:-8080}
 export JI_TP=2 JI_JPF=1 JI_TP_MARGIN_MIB=${JI_TP_MARGIN_MIB:-1500}
 export JI_SLOT_DIR=${JI_SLOT_DIR:-/mnt/ssd/kvcache}
