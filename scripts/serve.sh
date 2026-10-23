@@ -11,9 +11,10 @@
 #   JI_CTX=262144          context length    JI_CACHE_RAM=8192  host-RAM prompt cache (MiB) for switching conversations
 #   JI_SLOT_DIR=dir        enable slot save/restore to disk
 #   Sparse attention (default on, a deliberate trade: not free, worth it): prefill from 32k context (JI_SPARSE_PF=8192,
-#   the prompt's last 4096 positions exact; +30 % at 80k, ~2.4x at 262k) and decode from 32k (JI_SPARSE=16384, +8 % at
-#   72k, +44 % at 245k); KL vs full attention ~0.00045 for both together at 130k (on top of the weight / KV
-#   quantization error). JI_SPARSE_PF=0 / JI_SPARSE=0 turn them off.
+#   the prompt's last 4096 positions exact; +30 % at 80k, ~2.4x at 262k) and decode from 32k (JI_SPARSE=65536 keys since
+#   2026-10-23: 200k decode 25.6 dense -> 31.5 t/s, decode KL vs full attention 0.0009 at 130k / 0.0036 at 261k; the old
+#   16384 gave 0.0115 / 0.0177 for ~the same speed - measured on the corrected v2 references, engineering log 2026-10-23).
+#   JI_SPARSE_PF=0 / JI_SPARSE=0 turn them off.
 #   Other qwen35moe fine-tunes (exl3_to_gguf.py): MiniCPM-V 4.7 EXL3 3.74 bpw (mul1, 6-8 bit dense layers) needs
 #   JI_UBATCH=2048 at 262k context (its larger dense weights + the 4096-token compute buffer over-commit VRAM).
 #   JI_SP_DENSE_LAYERS=3,7,11: max-quality decode (sparse decode KL ~0.00033 -> ~0.00005, the harness floor) for -6 % at
