@@ -1704,3 +1704,21 @@ Kernel note: a refcount underflow warning in amdgpu_job_free (amdgpu_cs_ioctl, 2
    was measured against them. A JDE-prefilled 32k prefix scored KL 0.13 against the v1 reference only because the
    reference was wrong. v2 references and states (1 GiB blocks): ~/jt/*_v2.jref, jref_v2/, kl_v2.sh; all gates to be
    re-run on them.
+
+## 2026-10-24 Sparse attention re-tuned on corrected references (defaults changed)
+
+**Gains (2 GPUs, 100 W, 1024-token decodes):** decode at 200k 25.6 dense / 31.5-34.4 old default -> **32.4 t/s** new
+default at KL 0.0011 (old default: 0.0177 at 261k); prefill 151k 224 dense / 464 old default -> **288-293 t/s** new
+default at KL 0.0014 (old: 0.0051 at 130k). End to end (both sparse) 130k 0.00125, 261k 0.00165 - about the q8_0-KV
+error itself. Short spectest (MTP, 1024 tokens): 51.4 / 61.0 / 55.2 t/s.
+
+- Defaults: decode budget max(64k, 0.5 x context) + JI_SP_SEL=1 (mass-estimate ranking, wrongly rejected on the
+  broken refs: -40 % KL and faster); prefill max(32k, 0.5 x keys) + JI_SPF_SEL=1 (new: log-sum-exp of sub-page
+  mass estimates). New knobs JI_SPARSE_FRAC / JI_SPARSE_PF_FRAC; prefill block list 16-bit (cap 512 -> 1200 pages).
+- Diagnostics on v2: tail estimate barely helps; exact mass x mean V worse than the estimate; per-layer error even;
+  monopole tail no gain; prefill tail modes ~same. Oracle ranking (fixed: it scored rotated K with the raw-basis
+  query since JI_SP_RAW) is at most ~1.7x better -> this model's attention is broad; quality = fraction read exactly.
+- amdgpu.gpu_recovery=0 (user-approved): a GPU hang no longer freezes the box; a hung card needs a cold power cycle.
+- Reliability (open-paths S10): 2 TP2-prefill ring timeouts in ~10 h; one unexplained server exit during a prefill
+  (job 20, log lost; two exact replays clean).
+- Research reports 2 and 3 (Gemini) triaged into open-paths M1-M5, L7-L10, T0 (post-MVP sparse track).

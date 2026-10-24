@@ -25,6 +25,14 @@ Targets (dev box AUX-1; see README for the table):
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
+## Resume point (2026-10-24)
+
+Sparse attention re-tuned on corrected v2 references (features/sparse-attention.md): decode 200k 32.4 t/s at KL 0.0011,
+prefill 151k ~290 t/s at KL 0.0014. KL references: ~/jt/*_v2.jref + jref_v2/ (kl_v2.sh) - the v1 ones are corrupt.
+AUX1 boots with amdgpu.gpu_recovery=0. Production (serve_prod.sh) stopped since 2026-10-23 (user: not needed for now).
+Next: KVarN-6 (sealed path broken: KL ~1.7; save/restore hooks fixed), incl. asymmetric K6V5 / K6V4 (user-approved);
+then MVP hardening (S10 reliability soak, API suite, single-card release config, graph-path bug).
+
 ## Resume point (2026-10-23, later)
 
 Production: `scripts/serve_prod.sh` = TP2 + JDE prefill + MTP (JI_MTP=1, margin 1900) + JI_CACHE_SWAPS=16 + Qwen-Sharp
