@@ -1722,3 +1722,11 @@ error itself. Short spectest (MTP, 1024 tokens): 51.4 / 61.0 / 55.2 t/s.
 - Reliability (open-paths S10): 2 TP2-prefill ring timeouts in ~10 h; one unexplained server exit during a prefill
   (job 20, log lost; two exact replays clean).
 - Research reports 2 and 3 (Gemini) triaged into open-paths M1-M5, L7-L10, T0 (post-MVP sparse track).
+
+## 2026-10-25 KVarN-6 ring allocation fix (engine 4f5d347ee)
+
+**Diagnosis:** Decode performance after MTP runs was much slower (job 33: 45 ms/token vs expected 27.5 ms with identical expert hits/misses). Job 35 per-kernel profile showed MoE and shared-expert matvecs 2–2.6× slower, while attention remained unchanged. Job 37 sysfs trace revealed VRAM -> GTT eviction: 1.4–2.8 GB of GPU buffers pushed to system memory. Root cause: the separate window ring buffers (130 MiB) reduced the primary GPU's free-VRAM margin from ~412 to ~281 MiB, triggering aggressive eviction. Job 34 ruled out the prefill copy buffer `kvr_pft` as a cause of the 130k prefill failure (forcing it at 32k gave the same KL 0.00085, and the buffer is used even at 32k because the compute buffer is full).
+
+**Fix:** window rings now live in the top `kvr_cw` (12544) cells of each kv-head region of the layer's own K / V tensors ("the tail"), because KVarN records use 208 B/cell instead of q8_0's 272 and never reach that region when kv_size >= ~4.25 × the ring size. This eliminates the fixed 130 MiB allocation, freeing the VRAM margin. Below that threshold or with `JI_KVR_TAIL=0`, rings revert to separate buffers.
+
+**Results:** TP2 1024-token decode (rewrite / story / explain): KVarN 32.9 / 34.1 / 34.5 → 50.6 / 60.8 / 55.3 t/s (q8_0 baseline 51.6 / 61.1 / 55.8). KL unchanged (decode from restored states): single card 32k 0.00058, 130k 0.00074; TP2 32k 0.00047, 130k 0.00081. VRAM profile: no GTT eviction observed.

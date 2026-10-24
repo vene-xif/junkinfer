@@ -25,10 +25,7 @@ hold **records**: per kv head, tile t (cells 128t .. 128t+127) at word t × 6656
   - K: `Ak f32[256] | Bk f16[256] | Ck f16[2][128]`, with K[t][c] = Ck[s][t] · (Ak[c]·x + Bk[c])
   - V: `Av f16[2][128] | Bv f16[2][128] | Cv f32[256]`, with V[t][c] = Cv[c] · (Av[s][t]·x + Bv[s][t])
 
-The newest cells live in an exact q8_0 **window ring** per layer (`kvr_wk` / `kvr_wv`, `kvr_cw` = 12544 cells per
-head, row = cell % cw, 130 MiB for 10 layers). It is allocated at engine init, *before* the expert cache sizes
-itself from free VRAM. When it was allocated lazily, VRAM was over-committed, ~1.4 GB of buffers were evicted to
-GTT, and decode ran 3–4× slower.
+The newest cells live in an exact q8_0 **window ring** in the top `kvr_cw` (12544) cells of each kv-head region of the layer's own K / V tensors ("the tail"), because KVarN records use 208 B/cell instead of q8_0's 272 and never reach that region when kv_size >= ~4.25 × the ring size (~53k cells). Below that context size (or with `JI_KVR_TAIL=0`), the rings are separate buffers (`kvr_wk` / `kvr_wv`, 130 MiB for 10 layers). Rings are allocated at engine init, *before* the expert cache sizes itself from free VRAM. When they were allocated lazily as separate buffers, VRAM was over-committed, ~1.4 GB of buffers were evicted to GTT, and decode ran 3–4× slower (engine commit 4f5d347ee, rings-in-tail optimization).
 
 **Sealing** (`kvr_seal`): once the context passes 8192 cells, after every step, all complete tiles below n − 4
 (`KVR_ROLLBACK`, so speculative rollback never touches a record) are quantised from the ring into records. Each
@@ -95,6 +92,12 @@ The second freeze's dmesg showed the ring hang after a TP2 process ended mid-ste
 host-set VkEvents, and a dead relay never sets them. Engine 2c61614d3 releases every TP event before abort, at
 teardown and on fatal signals. See `features/README.md` (operational hazards).
 
+## MTP issue and resolution
+
+**Cause:** separate window rings (130 MiB) reduced the primary GPU's free-VRAM margin from ~412 to ~281 MiB; with MTP running, the amdgpu driver evicted 1.4–2.8 GB of buffers to GTT: card1 VRAM 7855 → 6903 MiB at load and 5473 after the prompts, GTT +1.4 / +2.8 GB; q8_0 unchanged. Per-kernel profile: MoE matvecs 14.6 → 29.6 ms/token, shared-expert 512×2048 matvec 2.6× slower; attention kernels unchanged.
+
+**Result (TP2, 1024 tokens, rewrite / story / explain):** KVarN 32.9 / 34.1 / 34.5 → 50.6 / 60.8 / 55.3 t/s; q8_0 51.6 / 61.1 / 55.8. KL unchanged (decode from restored states): single card 32k 0.00058, 130k 0.00074; TP2 32k 0.00047, 130k 0.00081.
+
 ## Measured (TP2, 100 W, 2026-10-23)
 
 | case | q8_0 | KVarN-6 |
@@ -112,3 +115,6 @@ KL gate (`kl.sh L_code 0 JI_TP=2 JI_KVARN=1`, vs our full-attention q8_0 referen
 - The in-place trick (records inside the q8 tensor) avoids touching llama.cpp's allocator. A clean engine would
   allocate 208 B/cell and save the whole 23.5 %.
 - Keep slot files in q8_0 (save materialises), so cache files stay engine- and format-independent.
+- On 8 GB cards every fixed buffer comes out of the margin the driver needs; VRAM over-commit doesn't fail, it
+  silently evicts buffers to GTT and halves matvec speed — check `mem_info_vram_used` / `mem_info_gtt_used` in
+  sysfs when a change slows unrelated kernels.
