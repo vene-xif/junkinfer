@@ -126,7 +126,7 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
   "ring ... timeout". Recovery: reboot; if a card is missing afterwards, cold power cycle.
 - Drop the page cache (`echo 3 > /proc/sys/vm/drop_caches`) before speed runs after big file reads (~10 % at 245k).
 
-- **Conversation switches** (two models' worth of bugs fixed 2026-10-26, engine 5b3e708): run
+- **Conversation switches** (two bugs fixed 2026-10-26, engine 5b3e708: KV-tail slot zeroing on restore, stale MTP rows): run
   `scripts/conv_switch_test.py` after any change to state save/restore, the KV guard / elastic slots or MTP.
 
 ## 7. How to measure
