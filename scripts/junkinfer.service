@@ -1,23 +1,29 @@
-# JunkInfer server as a systemd service (template).
-# install:  sudo cp scripts/junkinfer.service /etc/systemd/system/ && sudo systemctl daemon-reload
-#           sudo systemctl enable --now junkinfer        (logs: journalctl -u junkinfer -f)
-# options:  /etc/junkinfer.env, e.g.  JI_HOST=0.0.0.0  JI_API_KEY=...  JI_THINKING=off  (see scripts/serve.sh)
-# Only one model process may run on the card at a time: stop the service before benchmarks.
+# JunkInfer LLM server as a systemd service: starts at boot, LAN-facing, restarts on exit.
+# install:  sudo cp scripts/junkinfer.service scripts/ji-thermal-guard.service /etc/systemd/system/
+#           sudo systemctl daemon-reload && sudo systemctl enable --now ji-thermal-guard junkinfer
+#           (logs: journalctl -u junkinfer -f)
+# options:  /etc/junkinfer.env, e.g.  JI_API_KEY=...  JI_THINKING=off  JI_TP=0  (see scripts/serve_boot.sh, serve.sh)
+# Mode: scripts/serve_boot.sh - two cards: TP2 + two-card prefill + MTP (= serve_prod.sh); one card: single-card JDE.
+# Only one model process may run at a time: `sudo systemctl stop junkinfer` before benchmarks / KL runs.
 [Unit]
 Description=JunkInfer LLM server (Qwen3.6-35B-A3B on RX 580)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target ji-fancurve.service junkinfer-cpu-performance.service
+Wants=network-online.target ji-fancurve.service ji-thermal-guard.service
+RequiresMountsFor=/mnt/ssd
 
 [Service]
 User=vene
 WorkingDirectory=/home/vene/junkinfer
 EnvironmentFile=-/etc/junkinfer.env
-ExecStart=/home/vene/junkinfer/scripts/serve.sh
-Restart=on-failure
-RestartSec=10
+ExecStart=/home/vene/junkinfer/scripts/serve_boot.sh
+Restart=always
+RestartSec=15
+# SIGTERM: JDE releases the TP2 relay events before exiting (a hard kill mid-step can hang a GPU)
+KillSignal=SIGTERM
+TimeoutStopSec=60
 # pinned expert memory
 LimitMEMLOCK=infinity
-TimeoutStartSec=300
+TimeoutStartSec=600
 
 [Install]
 WantedBy=multi-user.target

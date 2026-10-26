@@ -1,0 +1,13 @@
+# GPU thermal logger / guard (scripts/thermal_guard.sh): logs/thermal.log, SIGTERM to the model process at 88 C.
+[Unit]
+Description=JunkInfer GPU thermal guard
+After=multi-user.target
+
+[Service]
+User=vene
+ExecStart=/home/vene/junkinfer/scripts/thermal_guard.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
