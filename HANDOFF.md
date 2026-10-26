@@ -6,6 +6,11 @@ first, then `engineering-SIREN/index.md` and `engineering-SIREN/current/STATE.md
 
 ## 1. What this is
 
+**Served model since 2026-10-26: Sage-A1.5** (InternScience; a fine-tune of the same architecture, EXL3 4.0 bpw from
+`jyohukuchan/Sage-A1.5-exl3-4.0bpw`, GGUF `/mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf`, alias `sage-a1.5`).
+Qwen3.6 stays available (`JI_MODEL=/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf` in `/etc/junkinfer.env`).
+All numbers below are for Qwen3.6 unless marked Sage; Sage notes are in §2.
+
 Fast local inference of **Qwen3.6-35B-A3B** (hybrid MoE: 40 layers, 10 full-attention + 30 Gated DeltaNet,
 256 experts, 8 active, A3B) on **AMD RX 580 8 GB** cards (gfx803 / Polaris, Vulkan via RADV). Weights: community
 **EXL3 4.0 bpw**, converted to GGUF (`tools/exl3/exl3_to_gguf.py`). The engine is a **llama.cpp fork** with a
@@ -26,6 +31,15 @@ zero context and >= 500 t/s at 262k; quality not below EXL3 3.5 bpw weights and 
   `peculiar-ragdoll/Qwen-Sharp-Chat-Templates` `chat_template.jinja`, identical as of 2026-10-26).
 - Restarts on exit. Verified across two reboots on 2026-10-26: server, thermal guard, fan curve, governor all up.
   `scripts/smoke_api.py`: ALL PASS (chat, tool-call parsing, prefix cache 6839 -> 23 tokens, prefill 536 t/s).
+
+**Sage-A1.5 (boot default, 2026-10-26):** TP2, **no MTP**, Qwen-Sharp template, alias `sage-a1.5`. smoke_api ALL
+PASS (prefill 541 t/s on 6.8k). Decode rewrite / story / explain 39.6 / 45.0 / 41.7 t/s; Qwen3.6 same config and day:
+43.2 / 51.2 / 48.0. Why slower: Sage's EXL3 uses the `mul1` codebook (Qwen3.6: `mcg`); same bit widths, same expert
+hit rate (93.6 vs 93.9 %), but GPU time 21.8 vs 18.0 ms/token — our `mul1` mat-vec costs ~20 % more per weight on
+gfx803 (open-paths #7). MTP: the converter drops Sage's own (EXL3) MTP layer; the Qwen3.6 draft head gains nothing
+on Sage (34.6 / 45.6 / 42.6 with vs 38.6 / 45.1 / 41.7 without; rewrite acceptance 64 % vs 94 % on Qwen), so
+serve_boot.sh turns MTP off for Sage. TP2 hot-expert set regenerated for Sage (`ref/tp/tp_hot_sage15_exl3.bin`;
+top-80 overlap with Qwen's only 36 %; no measurable speed change). Sage quality (KL vs its BF16) is not measured.
 
 **Measured speed** (AUX-1, both GPUs capped at 100 W, EXL3 4.0 bpw, q8_0 KV, sparse defaults, >= 1024 tokens):
 
@@ -167,7 +181,12 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 6. **Throughput toward targets**: decode — expert misses stream over PCIe (hit rate ~84 %; MoE mat-vecs are ~50 %
    of a 2-token step's GPU time); prefill — power-bound at 100 W, EXL3 GEMM efficiency ~45 % of peak.
    `open-paths.md` has the ordered list.
-7. **Post-MVP sparse-attention track** (user-approved order): micro-block / sub-page centroids (M1-M2) before any
+7. **Sage-A1.5 follow-ups:** (a) its own MTP head — dequantise the EXL3 `mtp.*` tensors (numpy mul1 decoder in
+   `tools/exl3/exl3_ref.py`) and build the IQ4_NL sidecar like `mtp-IQ4_NL.v2.gguf` (`tools/mtp_extract.py`), or
+   fetch only the BF16 `mtp.*` shard of InternScience/Sage-A1.5 (download needs permission); expected +14-23 %
+   decode as on Qwen3.6. (b) a faster `mul1` mat-vec (open-paths #7) recovers the ~20 % gap. (c) the KL references
+   are Qwen3.6's: Sage has no quality gate yet.
+8. **Post-MVP sparse-attention track** (user-approved order): micro-block / sub-page centroids (M1-M2) before any
    learned estimator; learned corrector with warm start, <= 24 h of GPU time total. `open-paths.md` L1-L10, M1-M5, T0.
 
 ## 10. Lessons that cost time (don't repeat)

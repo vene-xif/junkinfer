@@ -1756,3 +1756,21 @@ two reboots; smoke_api ALL PASS (prefill 536 t/s on 6.8k, prefix reuse 6839 -> 2
 
 **Docs:** HANDOFF.md (new), STATE.md current state, README numbers, code-map.md (new), tools/aux-jt refreshed
 (sudo password removed from the copies). Project paused by the user.
+
+## 2026-10-26 — Sage-A1.5 as the served model (user request)
+
+`jyohukuchan/Sage-A1.5-exl3-4.0bpw` (InternScience Sage-A1.5, `qwen3_5_moe`: same layers, heads, experts, vocab
+248,320; EXL3 4.0 bpw, head 6 bpw, **mul1** codebook, MTP layer 4 bpw, vision tower 6 bpw). Downloaded to AUX-1
+`~/models/Sage-A1.5-exl3-4.0bpw` (19.4 GB, HDD); `tools/exl3/exl3_to_gguf.py <dir> <Qwen3.6 exl3 gguf> /mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf`:
+1475 tensors, 17.21 GiB, tokenizer identical (0 tokens re-derived). serve.sh: default model Sage when present
+(`JI_MODEL` overrides), alias by model file, TP hot set by model.
+
+Evidence (TP2, 100 W, spectest 3 x 1024 tokens, rewrite / story / explain):
+- Sage + Qwen3.6 MTP head: 34.6 / 45.6 / 42.6 t/s, acceptance 288/453, 448/510, 419/491.
+- Sage, no MTP: 38.6 / 45.1 / 41.7; with a Sage hot set (`ref/tp/tp_hot_sage15_exl3.bin`, routegen 6 x 400 tokens;
+  top-80-per-layer overlap with Qwen's set 36 %): 39.4 / 44.9 / 41.6 — no change.
+- Profile (JI_PROFILE=200): Sage GPU 21.82 ms/token, hit rate 93.6 %; Qwen3.6 same harness and day 17.97 ms, 93.9 %,
+  decode 43.2 / 51.2 / 48.0. Same tensor types (370 EXL3_4 + head EXL3_6): the difference is the mul1 codebook
+  (~20 % dearer per weight in our mat-vec; open-paths #7).
+- Boot default: Sage, MTP off (serve_boot.sh): 39.6 / 45.0 / 41.7; smoke_api ALL PASS, prefill 540.6 t/s (6,839 tokens).
+Open: Sage's own MTP head; mul1 mat-vec speed; Sage KL gate (no reference yet).

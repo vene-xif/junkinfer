@@ -10,8 +10,14 @@ cd "$(dirname "$0")/.."
 ncards=$(ls -d /sys/class/drm/card[0-9] 2>/dev/null | wc -l)
 export JI_HOST=${JI_HOST:-0.0.0.0} JI_PORT=${JI_PORT:-8080}
 export JI_SLOT_DIR=${JI_SLOT_DIR:-/mnt/ssd/kvcache}
+# MTP default: on for Qwen3.6 (its own draft head, +14-23 % decode); off for Sage-A1.5 (default model when present):
+# the converter drops Sage's EXL3 MTP layer and the Qwen3.6 head gains nothing on it (2026-10-26: rewrite / story /
+# explain 34.6 / 45.6 / 42.6 t/s with it vs 38.6 / 45.1 / 41.7 without)
+MTP_DEF=1
+[ -z "${JI_MODEL:-}" ] && [ -f /mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf ] && MTP_DEF=0
+case "${JI_MODEL:-}" in *Sage-A1.5*) MTP_DEF=0 ;; esac
 if [ "$ncards" -ge 2 ] && [ "${JI_TP:-2}" != 0 ]; then
-  export JI_TP=${JI_TP:-2} JI_JPF=${JI_JPF:-1} JI_MTP=${JI_MTP:-1}
+  export JI_TP=${JI_TP:-2} JI_JPF=${JI_JPF:-1} JI_MTP=${JI_MTP:-$MTP_DEF}
   if [ "$JI_MTP" != 0 ]; then export JI_TP_MARGIN_MIB=${JI_TP_MARGIN_MIB:-1900}; else export JI_TP_MARGIN_MIB=${JI_TP_MARGIN_MIB:-1500}; fi
   echo "serve_boot: $ncards GPUs - two-card mode (JI_TP=$JI_TP, MTP=$JI_MTP)"
 else

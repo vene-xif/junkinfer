@@ -6,6 +6,10 @@ First target: **Qwen3.6-35B-A3B and its fine-tunes (`qwen35moe`) on the AMD RX 4
 Status: **usable MVP, project paused (2026-10-26).** OpenAI- and Anthropic-compatible server, tool calls, thinking,
 prompt caching, full 262k context, on one or two RX 580s. Handoff for whoever continues: [HANDOFF.md](HANDOFF.md).
 
+The dev box serves **Sage-A1.5** (InternScience's fine-tune of the same architecture) by default since 2026-10-26:
+two cards, no MTP, decode ~40-45 t/s short, prefill ~540 t/s (7k); Qwen3.6 numbers below (`JI_MODEL=...` selects
+the model).
+
 Measured on the dev box (EXL3 4.0 bpw, q8_0 KV, sparse attention on, both GPUs capped at 100 W, >= 1024 generated
 tokens), October 2026:
 

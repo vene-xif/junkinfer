@@ -32,7 +32,8 @@ export JI_MTP=${JI_MTP:-1}
 if [ "$JI_MTP" != 0 ]; then DEF_MARGIN=1900; else DEF_MARGIN=1500; fi
 export JI_TP=2 JI_JPF=1 JI_TP_MARGIN_MIB=${JI_TP_MARGIN_MIB:-$DEF_MARGIN}
 export JI_SLOT_DIR=${JI_SLOT_DIR:-/mnt/ssd/kvcache}
-MODEL=${MODEL:-/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf}
+MODEL=${MODEL:-${JI_MODEL:-/mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf}}
+[ -f "$MODEL" ] || MODEL=/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf
 mkdir -p logs
 # supervisor: restarts the server if it exits (crash, GPU hang abort); the crashed run's log is kept as
 # logs/server.<time>.crash.log, restarts are listed in logs/restarts.log. Stop: kill $(cat logs/supervisor.pid), then the server.

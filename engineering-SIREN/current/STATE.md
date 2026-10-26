@@ -21,6 +21,10 @@ Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workfl
   -> TP2 decode + two-card JDE prefill + MTP (one card -> single-card JDE), q8_0 KV, 262k context, sparse attention,
   Qwen-Sharp chat template, thinking on, auto-restart. `ji-thermal-guard.service` logs GPU temperatures. Verified
   across two reboots; `smoke_api.py` ALL PASS (2026-10-26). Engine 4f5d347ee, project 3f44c65+.
+- **Served model: Sage-A1.5** (since 2026-10-26, user; Qwen3.6 fine-tune, same architecture / tokenizer, EXL3 4.0
+  bpw mul1 codebook): TP2, no MTP (the Qwen3.6 draft head doesn't help it), decode 39.6 / 45.0 / 41.7 t/s
+  (rewrite / story / explain), prefill 541 t/s (6.8k); Qwen3.6 same day, no MTP: 43.2 / 51.2 / 48.0 (mul1 mat-vecs
+  ~20 % slower). Details HANDOFF.md §2. Qwen3.6 numbers below.
 - **Speed (100 W cap, >= 1024 tokens):** decode short 51.6 / 61.1 / 55.8 t/s (TP2 + MTP), 200k 32.4 (no MTP);
   prefill ~550 t/s (7k), 288-293 t/s (151k). Targets not met: decode 80, prefill 1000 / 500.
 - **Quality:** sparse end to end KL 0.00125 (130k) / 0.00165 (261k) vs full attention (q8_0 KV itself ~0.001).

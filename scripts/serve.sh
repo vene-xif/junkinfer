@@ -5,7 +5,8 @@
 # Environment (all optional):
 #   JI_HOST=0.0.0.0        listen address (default 127.0.0.1: local only)    JI_PORT=8080
 #   JI_API_KEY=secret      require "Authorization: Bearer secret" (OpenAI) / "x-api-key" (Anthropic)
-#   JI_ALIAS=name          model name reported to clients (default qwen3.6-35b-a3b)
+#   JI_MODEL=path.gguf     model (default: Sage-A1.5 EXL3 4.0 bpw if present, else Qwen3.6-35B-A3B EXL3 4.0 bpw)
+#   JI_ALIAS=name          model name reported to clients (default: sage-a1.5 / qwen3.6-35b-a3b by model file)
 #   JI_THINKING=off        default thinking off (clients can still enable it per request with
 #                          chat_template_kwargs {"enable_thinking": true}); default: on
 #   JI_CTX=262144          context length    JI_CACHE_RAM=8192  host-RAM prompt cache (MiB) for switching conversations
@@ -22,13 +23,21 @@
 # Endpoints: OpenAI /v1/chat/completions, /v1/completions, /v1/responses, /v1/models; Anthropic /v1/messages.
 set -euo pipefail
 ENGINE=${JUNKINFER_ENGINE:-$HOME/junkinfer/engine/build/bin}
-DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf
+# default model (2026-10-26, user): Sage-A1.5 (InternScience, a Qwen3.5/3.6-MoE fine-tune, same architecture and
+# tokenizer; jyohukuchan/Sage-A1.5-exl3-4.0bpw converted with tools/exl3/exl3_to_gguf.py), else Qwen3.6-35B-A3B
+DEFAULT_MODEL=/mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf
+[ -f "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf
 [ -f "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-IQ4_NL.gguf
-MODEL=${1:-$DEFAULT_MODEL}
+MODEL=${1:-${JI_MODEL:-$DEFAULT_MODEL}}
+case "$(basename "$MODEL")" in
+  Sage-A1.5*) DEF_ALIAS=sage-a1.5 ;;
+  MiniCPM-V-4.7*) DEF_ALIAS=minicpm-v-4.7 ;;
+  *) DEF_ALIAS=qwen3.6-35b-a3b ;;
+esac
 shift || true
 
 # client-facing options shared by both engines
-API_ARGS=(--alias "${JI_ALIAS:-qwen3.6-35b-a3b}" --cache-ram "${JI_CACHE_RAM:-8192}")
+API_ARGS=(--alias "${JI_ALIAS:-$DEF_ALIAS}" --cache-ram "${JI_CACHE_RAM:-8192}")
 # chat template: JI_CHAT_TEMPLATE (default: Qwen-Sharp, ref/templates/qwen_sharp.jinja - peculiar-ragdoll/Qwen-Sharp-
 # Chat-Templates; fetch: curl -L -o ref/templates/qwen_sharp.jinja https://huggingface.co/peculiar-ragdoll/Qwen-Sharp-Chat-Templates/resolve/main/chat_template.jinja
 # - agents such as Hermes got tool calls as plain text with the GGUF's embedded template). JI_CHAT_TEMPLATE=embedded: the GGUF's own
@@ -67,7 +76,10 @@ elif [ "${JI_TP:-0}" != 0 ]; then
   # MTP speculative decoding: JI_MTP=1 (below).
   JI_GPU=all
   export JI_TP GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
-  export JI_TP_HOT=${JI_TP_HOT:-$(cd "$(dirname "$0")/.." && pwd)/ref/tp/tp_hot_qwen36_exl3.bin}
+  # hot set = routing counts of the served model (JI_ROUTE_DUMP + tools/aux-jt/routegen.py 400): Sage-A1.5 routes
+  # differently from Qwen3.6 (top-80 per layer overlap 36 %)
+  case "$DEF_ALIAS" in sage-a1.5) HOTF=tp_hot_sage15_exl3.bin ;; *) HOTF=tp_hot_qwen36_exl3.bin ;; esac
+  export JI_TP_HOT=${JI_TP_HOT:-$(cd "$(dirname "$0")/.." && pwd)/ref/tp/$HOTF}
   EXPERT_ARGS=(-dev Vulkan1 --cpu-moe)
 fi
 [ "$JI_GPU" != all ] && export GGML_VK_VISIBLE_DEVICES=$JI_GPU
