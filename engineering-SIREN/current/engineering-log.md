@@ -1730,3 +1730,29 @@ error itself. Short spectest (MTP, 1024 tokens): 51.4 / 61.0 / 55.2 t/s.
 **Fix:** window rings now live in the top `kvr_cw` (12544) cells of each kv-head region of the layer's own K / V tensors ("the tail"), because KVarN records use 208 B/cell instead of q8_0's 272 and never reach that region when kv_size >= ~4.25 × the ring size. This eliminates the fixed 130 MiB allocation, freeing the VRAM margin. Below that threshold or with `JI_KVR_TAIL=0`, rings revert to separate buffers.
 
 **Results:** TP2 1024-token decode (rewrite / story / explain): KVarN 32.9 / 34.1 / 34.5 → 50.6 / 60.8 / 55.3 t/s (q8_0 baseline 51.6 / 61.1 / 55.8). KL unchanged (decode from restored states): single card 32k 0.00058, 130k 0.00074; TP2 32k 0.00047, 130k 0.00081. VRAM profile: no GTT eviction observed.
+
+## 2026-10-25 / 26 — KVarN 130k prefill narrowed, power-off, boot service, handoff
+
+**KVarN-6 prefill from scratch at 130k (KL 0.27).** Job 36: from-scratch 130k state vs the v2 reference state
+(`tools/aux-jt/kvrblk.py`). Layer 3 (first attention layer) K/V exact everywhere (rel. error 0.018 K / 0.024 V =
+KVarN noise). Later layers deviate from cell 12288 on (the first ubatch that attends over materialised sealed
+records): 0.02-0.19, peaking at 49k-57k, deeper layers worse. Recurrent state: rel. error 0.3 % (early) .. 7.7 %
+(deep). Looks like compounding quantisation noise, not a broken region; does not yet explain KL 0.27 vs 0.00115 at
+64k. Next: job40 (restore that state, tail with KVarN on / off). Status: ACTIVE.
+
+**KVarN-6 decode at 200k after the ring fix** (job 39, TP2, no MTP, sparse defaults): 25.1 / 27.4 t/s (q8 32.4).
+VRAM steady (card1 8127 -> 8181 MiB, GTT 18812 -> 18980 MiB): not a spill. Needs a per-kernel profile. ACTIVE.
+
+**Power-off 2026-10-25 01:47** during job 39's 151k two-card prefill. Not thermal: GPU max 70 / 63 C that boot,
+66 / 63 C in the last log line. No kernel message; journal just stops. SATA link resets on the mSATA SSD adapter
+2 min before (known, independent of load). Consistent with the power-delivery problem (2026-10-21: x4 card off the
+bus at 145 W). New PSU pending; 100 W cap stays.
+
+**Boot service** (project 2d20ea2, 3f44c65): `junkinfer.service` -> `scripts/serve_boot.sh` (two cards: TP2 + JDE
+prefill + MTP; one card: single-card), LAN 0.0.0.0:8080, Qwen-Sharp template (local file identical to upstream
+`chat_template.jinja`, git blob 74465e7f), Restart=always; `ji-thermal-guard.service`. Fix: helper units had
+`After=multi-user.target` -> ordering cycle, systemd dropped the governor and fan-curve units at boot. Verified by
+two reboots; smoke_api ALL PASS (prefill 536 t/s on 6.8k, prefix reuse 6839 -> 23 tokens), LAN chat 58 t/s.
+
+**Docs:** HANDOFF.md (new), STATE.md current state, README numbers, code-map.md (new), tools/aux-jt refreshed
+(sudo password removed from the copies). Project paused by the user.

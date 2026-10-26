@@ -9,11 +9,11 @@ chronological record stays in `../engineering-log.md`; these documents are the s
 | Sparse attention (decode + prefill, tail estimate) | [sparse-attention.md](sparse-attention.md) | default on |
 | Expert memory hierarchy (pinned host, VRAM cache, elastic slots, TP2 balance) | [expert-cache.md](expert-cache.md) | default on |
 | MTP speculative decoding (draft head on the helper GPU) | [mtp-speculative-decoding.md](mtp-speculative-decoding.md) | default on |
-| KVarN-6 KV cache (in place) | [kvarn6-kv-cache.md](kvarn6-kv-cache.md) | opt-in, gate pending |
+| KVarN-6 KV cache (in place) | [kvarn6-kv-cache.md](kvarn6-kv-cache.md) | opt-in; prefill from scratch > 64k broken (2026-10-25) |
 | JDE decode engine (one-shot tokens, fused kernels, EXL3 mat-vecs) | [jde-decode-engine.md](jde-decode-engine.md) | default on |
 | Tensor-parallel decode / prefill on two GPUs | [tensor-parallel-two-gpus.md](tensor-parallel-two-gpus.md) | production |
 | EXL3 kernels (trellis decode, stripe-major mat-vecs, GEMMs) | ../exl3-support.md (to be extended) | default on |
-| Prompt reuse, small prompts, server / supervisor | to write | default on |
+| Prompt reuse, small prompts, server / boot service | ../../../README.md, ../../../HANDOFF.md §2 / §6 (full doc to write) | default on |
 | Host / system tuning (DPM, governor, GTT, power cap) | ../physics.md + to write | — |
 
 ## Operational hazards (gfx803, two cards)

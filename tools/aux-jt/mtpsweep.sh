@@ -1,4 +1,5 @@
 #!/bin/bash
+export GGML_VK_VISIBLE_DEVICES=${GGML_VK_VISIBLE_DEVICES-1}   # x16 card (AUX-1 has 2 GPUs since 2026-10-20)
 # draft acceptance per MTP sidecar quantization (draft n = 3), 32k context to leave VRAM for the draft
 O=$(ps -eo pid,args | grep -E "[b]in/llama-(junk-ref|completion|perplexity|bench|cli)" | awk "{print \$1}")
 if [ -n "$O" ]; then echo "refusing: another model process is running"; exit 1; fi

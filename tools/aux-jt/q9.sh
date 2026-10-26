@@ -12,10 +12,10 @@ meas() {   # $1 label, rest env
 }
 B=06:00.0
 meas "baseline (MRRS 512)" JI_X=0
-echo kot | sudo -S -p "" setpci -s $B CAP_EXP+08.w=5000:7000
-echo kot | sudo -S -p "" lspci -vv -s $B 2>/dev/null | grep -o "MaxReadReq [0-9]* bytes" | head -1
+echo "$SUDO_PW" | sudo -S -p "" setpci -s $B CAP_EXP+08.w=5000:7000
+echo "$SUDO_PW" | sudo -S -p "" lspci -vv -s $B 2>/dev/null | grep -o "MaxReadReq [0-9]* bytes" | head -1
 meas "MRRS 4096" JI_X=0
-echo always | sudo -S -p "" true; echo kot | sudo -S -p "" sh -c 'echo always > /sys/kernel/mm/transparent_hugepage/enabled'; cat /sys/kernel/mm/transparent_hugepage/enabled
+echo always | sudo -S -p "" true; echo "$SUDO_PW" | sudo -S -p "" sh -c 'echo always > /sys/kernel/mm/transparent_hugepage/enabled'; cat /sys/kernel/mm/transparent_hugepage/enabled
 meas "MRRS 4096 + THP always" JI_X=0
 for z in 7 6 5; do meas "+ JI_X3_ZC=$z" JI_X3_ZC=$z; done
 P=$(ps -eo pid,args | grep "[b]in/llama-server -m /mnt/ssd" | awk "{print \$1}"); kill $P

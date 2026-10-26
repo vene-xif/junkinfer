@@ -1,4 +1,5 @@
 #!/bin/bash
+export GGML_VK_VISIBLE_DEVICES=${GGML_VK_VISIBLE_DEVICES-1}   # x16 card (AUX-1 has 2 GPUs since 2026-10-20)
 # full-attention references (EXL3 4.0 bpw, q8_0 head-major KV, JDE 4-token tail) for the long rows; prefix states cached
 cd ~/junkinfer/engine
 M="-m /mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf -ngl 99 --cpu-moe --no-repack --load-mode none -fa on --fit off -c 262144 -ctk q8_0 -ctv q8_0 -t 6 -b 4096 -ub 4096"

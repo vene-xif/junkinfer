@@ -3,18 +3,24 @@
 Fast local inference of large mixture-of-experts models on junk-priced GPUs.
 First target: **Qwen3.6-35B-A3B and its fine-tunes (`qwen35moe`) on the AMD RX 470/570/580 8 GB (gfx803, Polaris)**.
 
-Status: **usable MVP** on one RX 580 (OpenAI- and Anthropic-compatible server, tool calls, thinking, prompt
-caching, full 262k context). Measured on the dev box (EXL3 4.0 bpw, q8_0 KV), October 2026:
+Status: **usable MVP, project paused (2026-10-26).** OpenAI- and Anthropic-compatible server, tool calls, thinking,
+prompt caching, full 262k context, on one or two RX 580s. Handoff for whoever continues: [HANDOFF.md](HANDOFF.md).
 
-| | short context | 100k | 245k |
-|---|---|---|---|
-| decode | ~45 t/s | ~34 t/s | ~31 t/s |
-| prefill | ~450 t/s (7k prompt) | ~360 t/s (80k prompt) | ~230 t/s (262k, measured on the KL harness) |
+Measured on the dev box (EXL3 4.0 bpw, q8_0 KV, sparse attention on, both GPUs capped at 100 W, >= 1024 generated
+tokens), October 2026:
 
-Attention is sparse at long context, on by default as a deliberate trade (not free, but worth it): prefill from 32k
-context (the prompt's last 4096 positions exact), decode from 32k, both with a tail estimate of the unselected keys.
-Together they add KL ~0.00045 vs full attention at 130k, on top of the weight / KV quantization error.
-`JI_SPARSE_PF=0` / `JI_SPARSE=0` turn them off.
+| | two RX 580s (TP2 + MTP) | one RX 580 |
+|---|---|---|
+| decode, short context | 51-61 t/s | ~46 t/s |
+| decode, 100k | ~45 t/s | ~34 t/s |
+| decode, 200k-245k | ~32 t/s at 200k (no MTP) | ~30 t/s at 245k |
+| prefill, ~7k prompt | ~550 t/s | ~450 t/s |
+| prefill, 151k prompt | ~290 t/s | — |
+
+Attention is sparse at long context, on by default as a deliberate trade: decode from 32k context (budget = the
+larger of 64k keys and half the context, ranked by estimated attention mass), prefill from 32k (the prompt's last
+4096 positions exact). End to end it adds KL ~0.0013 at 130k / ~0.0017 at 261k vs full attention — about the size of
+the q8_0 KV error itself. `JI_SPARSE=0` / `JI_SPARSE_PF=0` turn them off.
 
 ## Targets (dev box: Ryzen 5 2600, 32 GB DDR4-3000, RX 580 8 GB, PCIe 3.0 x16)
 
@@ -41,11 +47,15 @@ JI_HOST=0.0.0.0 JI_API_KEY=secret scripts/serve.sh  # LAN, with a key
 JI_THINKING=off scripts/serve.sh                     # thinking off by default (per request: enable_thinking)
 ```
 
-Two cards (the second may sit in a chipset x4 slot): `JI_TP=2 scripts/serve.sh` runs decode tensor-parallel on both
-(half of every layer per card, the second card also holds a hot-expert set; prefill stays on the first card).
-Measured on the dev box (2026-10-21): decode 46 -> 59 t/s short, 34 -> 45 at 100k, 30 -> 41 at 245k context; API
-suite 45/45 and the 117k needle pass. With `--spec-type ngram-map-k` (copy-heavy output such as code edits) 51 t/s
-where one card does 33. Not yet combinable with `--spec-type draft-mtp`.
+Two cards (the second may sit in a chipset x4 slot): `scripts/serve_prod.sh` runs the production setup —
+tensor-parallel decode (half of every layer per card, the second card also holds a hot-expert set), two-card JDE
+prefill, and MTP speculative decoding (draft head on the second card). It listens on the LAN and restarts on exit.
+`JI_TP=2 scripts/serve.sh` is the same without MTP.
+
+Boot service (how the dev box runs it): `scripts/junkinfer.service` runs `scripts/serve_boot.sh` — two cards
+present -> the production setup, one card -> single-card mode — on `0.0.0.0:8080` with the Qwen-Sharp chat template.
+Options go to `/etc/junkinfer.env` (e.g. `JI_API_KEY=...`). `scripts/ji-thermal-guard.service` logs GPU
+temperatures and stops the model at 88 C. Install steps are in the unit file's header.
 
 Other options are listed at the top of `scripts/serve.sh`; `scripts/junkinfer.service` is a systemd unit.
 Loading takes ~1.5 min. One request runs at a time (others queue); the host-RAM prompt cache keeps recent
@@ -68,9 +78,11 @@ running server: 45 checks, a few minutes; `--long` adds a ~117k-token needle que
 ## Layout
 
 ```
-engineering-SIREN/   the engineering record (start at engineering-SIREN/index.md)
+HANDOFF.md           state, access, rules, workflow and open work for whoever continues
+engineering-SIREN/   the engineering record (start at engineering-SIREN/index.md; code map: current/code-map.md)
 engine/              the inference engine (llama.cpp fork + the JunkInfer decode engine, src/junkinfer)
-scripts/             serve.sh, the API suite, benchmarks
+scripts/             serve.sh / serve_prod.sh / serve_boot.sh, systemd units, the API suite, benchmarks
+tools/aux-jt/        the AUX-1 test harness (KL gates, speed tests, job scripts)
 ref/                 the one-time BF16 reference run (VENE, RTX 3090) and its tools
 LICENSE              Apache-2.0
 NOTICES.md           third-party code and ideas this project uses

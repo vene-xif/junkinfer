@@ -13,7 +13,26 @@ Targets (dev box AUX-1; see README for the table):
 - MVP must include: OpenAI-compatible server, tool-call parsing, chat templates, prompt/prefix caching
 - release runs on one card; Linux; RX 470/570/580 8 GB first
 
-## Where we are (2026-10-19)
+## Current state (2026-10-26) — PROJECT PAUSED
+
+Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workflow, open work in order).
+
+- **Production:** boot service `junkinfer.service` on AUX-1 (`scripts/serve_boot.sh`): LAN `0.0.0.0:8080`, two cards
+  -> TP2 decode + two-card JDE prefill + MTP (one card -> single-card JDE), q8_0 KV, 262k context, sparse attention,
+  Qwen-Sharp chat template, thinking on, auto-restart. `ji-thermal-guard.service` logs GPU temperatures. Verified
+  across two reboots; `smoke_api.py` ALL PASS (2026-10-26). Engine 4f5d347ee, project 3f44c65+.
+- **Speed (100 W cap, >= 1024 tokens):** decode short 51.6 / 61.1 / 55.8 t/s (TP2 + MTP), 200k 32.4 (no MTP);
+  prefill ~550 t/s (7k), 288-293 t/s (151k). Targets not met: decode 80, prefill 1000 / 500.
+- **Quality:** sparse end to end KL 0.00125 (130k) / 0.00165 (261k) vs full attention (q8_0 KV itself ~0.001).
+- **KVarN-6 (`JI_KVARN=1`): opt-in, not production-ready.** Decode from restored states KL 0.0005-0.0011; MTP
+  short decode at q8 parity since the ring-in-tail fix (4f5d347ee: 32.9 / 34.1 / 34.5 -> 50.6 / 60.8 / 55.3 t/s).
+  Open: prefill from scratch > 64k wrong (130k KL 0.27), decode at 200k 25-27 vs 32.4 t/s.
+- **Hardware:** two power-offs without log entries under two-card load (2026-10-24, 2026-10-25), not thermal
+  (GPUs <= 70 C): power delivery suspected (new PSU pending; 100 W cap stays). TP2 prefill ring hang S10 open.
+- **Next (in order):** HANDOFF.md §9 — KVarN 130k prefill (job40 ready), KVarN 200k decode profile, K6V5/K6V4,
+  S10 soak, API suite (needs pip permission), single-card release config, throughput levers (open-paths.md).
+
+## Where we are (2026-10-19) — SUPERSEDED 2026-10-26 (see above)
 
 - **MVP usable** (README "Using it"): `scripts/serve.sh` (EXL3 4.0 bpw default, alias qwen3.6-35b-a3b, JI_HOST /
   JI_API_KEY / JI_THINKING / JI_CACHE_RAM), `scripts/junkinfer.service`. `scripts/api_suite.py` (OpenAI + Anthropic
@@ -25,7 +44,7 @@ Targets (dev box AUX-1; see README for the table):
 - Speed (2026-10-19/20): decode ~44 t/s short, ~35 at 72k, ~32 at 100k, 29.6 at 245k; prefill ~450 t/s (7k), 305-319
   (132k), 317 (117k needle). Sparse attention KL ~0.00045 at 130k. API suite 46/46.
 
-## Resume point (2026-10-24)
+## Resume point (2026-10-24) — SUPERSEDED 2026-10-26
 
 Sparse attention re-tuned on corrected v2 references (features/sparse-attention.md): decode 200k 32.4 t/s at KL 0.0011,
 prefill 151k ~290 t/s at KL 0.0014. KL references: ~/jt/*_v2.jref + jref_v2/ (kl_v2.sh) - the v1 ones are corrupt.
@@ -33,7 +52,7 @@ AUX1 boots with amdgpu.gpu_recovery=0. Production (serve_prod.sh) stopped since 
 Next: KVarN-6 (sealed path broken: KL ~1.7; save/restore hooks fixed), incl. asymmetric K6V5 / K6V4 (user-approved);
 then MVP hardening (S10 reliability soak, API suite, single-card release config, graph-path bug).
 
-## Resume point (2026-10-23, later)
+## Resume point (2026-10-23, later) — SUPERSEDED
 
 Production: `scripts/serve_prod.sh` = TP2 + JDE prefill + MTP (JI_MTP=1, margin 1900) + JI_CACHE_SWAPS=16 + Qwen-Sharp
 template + supervisor (auto-restart) + CPU governor performance (needs `scripts/cpu_performance.sh install` once
@@ -41,7 +60,7 @@ for reboots). Fresh decode 49-59 t/s (600-token replies), prefill ~530 t/s (6.8k
 Fixed today: post-prefill slowdown (governor), MTP garbage after restore + prefill, TP-loss crash path.
 Next: KVarN-6 integration (kernels kvr_seal / attn_hmr + harness written, JI_ATTN_TEST=n JI_ATTN_KVR2=1).
 
-## Resume point (2026-10-21, two RX 580s)
+## Resume point (2026-10-21, two RX 580s) — SUPERSEDED
 
 AUX-1: Vulkan1 = x16 card, Vulkan0 = chipset x4 card. Best dual mode: `JI_TP=2 scripts/serve.sh` (engine c4f8da270+):
 decode short 59.1, 100k 45.2, 245k 41.1 t/s (single 46.3 / 33.8 / 30.0); code rewrite + n-gram spec 50.6 (single 32.6);

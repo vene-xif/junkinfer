@@ -7,7 +7,7 @@ prompts = {
   "explain": "Explain how a hash map works internally, including collision handling and resizing, with a small C example.",
 }
 for name, p in prompts.items():
-    body = {"messages": [{"role": "user", "content": p}], "max_tokens": 600, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
+    body = {"messages": [{"role": "user", "content": p}], "max_tokens": 1024, "ignore_eos": True, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request("http://127.0.0.1:8080/v1/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     d = json.load(urllib.request.urlopen(req, timeout=3600))
     t = d["timings"]
