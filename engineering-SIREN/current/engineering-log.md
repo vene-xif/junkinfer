@@ -1774,3 +1774,27 @@ Evidence (TP2, 100 W, spectest 3 x 1024 tokens, rewrite / story / explain):
   (~20 % dearer per weight in our mat-vec; open-paths #7).
 - Boot default: Sage, MTP off (serve_boot.sh): 39.6 / 45.0 / 41.7; smoke_api ALL PASS, prefill 540.6 t/s (6,839 tokens).
 Open: Sage's own MTP head; mul1 mat-vec speed; Sage KL gate (no reference yet).
+
+## 2026-10-26 — Tool calls emitted as text (Hermes): two conversation-switch bugs, fixed (engine 5b3e708)
+
+**Problem.** In Hermes (29 tools, ~20.7k-token system prompt, cron jobs and chats sharing the server) tool calls
+often came back as text (`<invoke name="web_search">…`, `<function=terminal>{json}`, prose), on Sage and Qwen3.6.
+The web UI and short tests were fine. A Hermes-side probe (its `real_body.bin`) parsed 1/6 calls.
+
+**Diagnosis.**
+- Same payload: full re-prefill (`cache_prompt: false`) correct every time; raw completions on the reused state
+  hallucinated other requests and special tokens. Not template / parser: the state was wrong.
+- A (prefix X + user a), C (X + user c), A: fine (prefix rollback via context checkpoints works).
+- A, unrelated B, A (slot switch through the host-RAM prompt cache): with MTP, HTTP 500 "failed to process
+  speculative batch" (ctx_dft got B's deferred MTP rows at positions < its last); without MTP, a wrong greedy answer
+  (`scripts/conv_switch_test.py`: 17*23 = 391 fresh, 393 after the switch). `JI_ELASTIC=0` -> correct.
+
+**Fix.**
+1. `jde_kv_pre_restore` before every KV-writing state read: KV-tail expert slots released (fills waited, zeroed)
+   before the restore. Before, the restore wrote rows over active slots and the next `jde_kv_guard` evicted them with
+   a zero fill over the restored rows (cells ~7.8k..14.3k in the test).
+2. MTP `flush_deferred`: only rows that continue ctx_dft's memory are decoded; stale rows dropped.
+
+**Evidence.** conv_switch_test ALL PASS: Sage MTP off, Qwen3.6 MTP on. Hermes payload interleaved with another
+conversation: 5/5 parsed tool calls (Sage), 6/6 repeated; SSE streaming 4/4. smoke_api ALL PASS (prefill 548 t/s).
+Steady decode unaffected; after a switch the KV-tail expert slots refill.
