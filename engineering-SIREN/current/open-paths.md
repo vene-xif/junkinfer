@@ -10,6 +10,9 @@ Current numbers (AUX-1, EXL3 4.0 bpw, q8_0 KV, sparse attention on): decode ~44 
 (132k), ~230 (262k). Combined sparse KL vs full attention ~0.00045 at 130k.
 Targets: single card decode >= 50 t/s at any depth; dual card decode >= 80, prefill >= 1000 / >= 500 (262k).
 
+**TOP PRIORITY (user, 2026-10-26): native EXL3 loading + MTP + vision from the checkpoint + fast mul1 decode —
+`native-exl3-plan.md`.** Item 7 (v_sad_u8) is its step 6.
+
 Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EXL3 4.0 bpw full-attention output.
 
 ## Tier 0 - hours (config, env knobs, already-written code awaiting a run)

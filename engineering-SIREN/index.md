@@ -6,6 +6,8 @@
 ## Read in this order
 
 1. `SIREN.md` — rules.
+1b. `../HANDOFF.md` — handoff: state, access, rules, workflow, open work (start here if you are new).
+1c. `current/native-exl3-plan.md` — **the top-priority work item** (native EXL3, MTP, vision, fast mul1).
 2. `current/STATE.md` — current state, targets, open items (live).
 3. `current/physics.md` — the hardware and model arithmetic: what is possible on this box.
 4. `current/quality-gates.md` — how quality is measured (BF16 reference, KLD).

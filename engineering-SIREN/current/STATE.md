@@ -33,7 +33,9 @@ Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workfl
   Open: prefill from scratch > 64k wrong (130k KL 0.27), decode at 200k 25-27 vs 32.4 t/s.
 - **Hardware:** two power-offs without log entries under two-card load (2026-10-24, 2026-10-25), not thermal
   (GPUs <= 70 C): power delivery suspected (new PSU pending; 100 W cap stays). TP2 prefill ring hang S10 open.
-- **Next (in order):** HANDOFF.md §9 — KVarN 130k prefill (job40 ready), KVarN 200k decode profile, K6V5/K6V4,
+- **TOP PRIORITY (user, 2026-10-26): native EXL3** (no conversion; keep MTP + vision; fast mul1):
+  `native-exl3-plan.md`.
+- **Next (after / alongside):** HANDOFF.md §9 — KVarN 130k prefill (job40 ready), KVarN 200k decode profile, K6V5/K6V4,
   S10 soak, API suite (needs pip permission), single-card release config, throughput levers (open-paths.md).
 
 ## Where we are (2026-10-19) — SUPERSEDED 2026-10-26 (see above)

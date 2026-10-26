@@ -160,6 +160,12 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 
 ## 9. Open work, in priority order
 
+0. **TOP PRIORITY (user, 2026-10-26): native EXL3 — load exllamav3 checkpoints without conversion, keep their MTP
+   layer and vision tower, make the current `mul1` codebook fast.** Full step-by-step plan, pitfalls, checks and
+   remaining headroom: [`engineering-SIREN/current/native-exl3-plan.md`](engineering-SIREN/current/native-exl3-plan.md).
+   It supersedes items 7 (Sage follow-ups) below. Items 1-6 continue after it (or in parallel where they don't touch
+   the same code).
+
 1. **KVarN-6: prefill from scratch beyond ~64k is wrong** (130k: KL 0.27 single card, 0.118 TP2; 32k 0.00085 and
    64k 0.00115 are fine; decode from restored states is fine everywhere: 0.0005-0.0011).
    Found so far (2026-10-25): not the separate prefill copy buffer (`JI_KVR_PFT=1` at 32k = same KL). A from-scratch
