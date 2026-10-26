@@ -11,7 +11,6 @@ if [ "${1:-}" = install ]; then
   sudo tee /etc/systemd/system/junkinfer-cpu-performance.service > /dev/null <<'UNIT'
 [Unit]
 Description=JunkInfer: CPU governor performance
-After=multi-user.target
 [Service]
 Type=oneshot
 ExecStart=/bin/sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g"; done'
