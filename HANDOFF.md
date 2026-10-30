@@ -121,7 +121,7 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 - **Power delivery is suspect.** The box powered off without any log entry twice under heavy two-card load
   (2026-10-24 and 2026-10-25 01:47, the latter during a 151k two-card prefill; GPUs at 66 / 63 C, so not
   thermal). The x4 card fell off the PCIe bus twice at 145 W (2026-10-21). The mSATA SSD adapter logs SATA link
-  resets independent of GPU load. A new PSU + case are expected; then re-verify at 145 W and remove the cap.
+  resets independent of GPU load. GPU power cap 100 W permanent (user decision 2026-10-30).
 - **TP2 prefill ring hang** (open-paths S10): ~2 hangs in ~10 h of two-card prefill. Check `dmesg` for
   "ring ... timeout". Recovery: reboot; if a card is missing afterwards, cold power cycle.
 - Drop the page cache (`echo 3 > /proc/sys/vm/drop_caches`) before speed runs after big file reads (~10 % at 245k).
@@ -166,8 +166,8 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 0. **TOP PRIORITY (user, 2026-10-26): native EXL3 — load exllamav3 checkpoints without conversion, keep their MTP
    layer and vision tower, make the current `mul1` codebook fast.** Full step-by-step plan, pitfalls, checks and
    remaining headroom: [`engineering-SIREN/current/native-exl3-plan.md`](engineering-SIREN/current/native-exl3-plan.md).
-   It supersedes items 7 (Sage follow-ups) below. Items 1-6 continue after it (or in parallel where they don't touch
-   the same code).
+   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. Sage 39.6 / 46.0 / 41.9 t/s. 2. Fast mul1 decode (open-paths #7). 3. Native EXL3 loader (plan steps 1-3). 4. Sage's own MTP head. 5. MTP verify-step anomaly. 6. Prefill: two-card time breakdown + balance. 7. EXL3 GEMM energy rewrite. 8. Short-prompt prefill (no re-stream). 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
+   It supersedes prior items below. Current items continue (or in parallel where independent).
 
 1. **KVarN-6: prefill from scratch beyond ~64k is wrong** (130k: KL 0.27 single card, 0.118 TP2; 32k 0.00085 and
    64k 0.00115 are fine; decode from restored states is fine everywhere: 0.0005-0.0011).
@@ -208,6 +208,9 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 - Single-card runs on a two-card box: the remaining card's Vulkan index changes when the other is missing.
 - Big page cache after downloads costs ~10 % decode at depth; CPU governor schedutil costs more.
 - In the agent's shell tool, chained `sleep` waits get blocked: use background commands with an until-loop.
+- On amdgpu, every host buffer imported into a GPU (userptr) costs page-walk time on every submit; use huge pages
+  for imports and keep them few (2026-10-31: prefill exchange buffer 134 MiB = 33k 4 KB pages = 23 ms of kernel
+  overhead per submit; 2 MiB alignment + MADV_HUGEPAGE + pre-fault cuts that to 0.1 ms).
 
 ## 11. Document map
 

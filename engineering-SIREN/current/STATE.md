@@ -13,7 +13,7 @@ Targets (dev box AUX-1; see README for the table):
 - MVP must include: OpenAI-compatible server, tool-call parsing, chat templates, prompt/prefix caching
 - release runs on one card; Linux; RX 470/570/580 8 GB first
 
-## Current state (2026-10-26) — PROJECT PAUSED
+## Current state (2026-10-31) — ACTIVE (plan below)
 
 Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workflow, open work in order).
 
@@ -22,21 +22,20 @@ Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workfl
   Qwen-Sharp chat template, thinking on, auto-restart. `ji-thermal-guard.service` logs GPU temperatures. Verified
   across two reboots; `smoke_api.py` ALL PASS (2026-10-26). Engine 4f5d347ee, project 3f44c65+.
 - **Served model: Sage-A1.5** (since 2026-10-26, user; Qwen3.6 fine-tune, same architecture / tokenizer, EXL3 4.0
-  bpw mul1 codebook): TP2, no MTP (the Qwen3.6 draft head doesn't help it), decode 39.6 / 45.0 / 41.7 t/s
-  (rewrite / story / explain), prefill 541 t/s (6.8k); Qwen3.6 same day, no MTP: 43.2 / 51.2 / 48.0 (mul1 mat-vecs
+  bpw mul1 codebook): TP2, no MTP (the Qwen3.6 draft head doesn't help it), decode 39.6 / 46.0 / 41.9 t/s
+  (rewrite / story / explain), prefill 541 t/s (6.8k); Qwen3.6 TP2 + MTP: 53.9 / 64.6 / 58.8 (mul1 mat-vecs
   ~20 % slower). Details HANDOFF.md §2. Qwen3.6 numbers below.
-- **Speed (100 W cap, >= 1024 tokens):** decode short 51.6 / 61.1 / 55.8 t/s (TP2 + MTP), 200k 32.4 (no MTP);
+- **Speed (100 W cap, >= 1024 tokens):** decode short 53.9 / 64.6 / 58.8 t/s (TP2 + MTP, 2026-10-31), 200k 32.4 (no MTP);
   prefill ~550 t/s (7k), 288-293 t/s (151k). Targets not met: decode 80, prefill 1000 / 500.
 - **Quality:** sparse end to end KL 0.00125 (130k) / 0.00165 (261k) vs full attention (q8_0 KV itself ~0.001).
 - **KVarN-6 (`JI_KVARN=1`): opt-in, not production-ready.** Decode from restored states KL 0.0005-0.0011; MTP
   short decode at q8 parity since the ring-in-tail fix (4f5d347ee: 32.9 / 34.1 / 34.5 -> 50.6 / 60.8 / 55.3 t/s).
   Open: prefill from scratch > 64k wrong (130k KL 0.27), decode at 200k 25-27 vs 32.4 t/s.
 - **Hardware:** two power-offs without log entries under two-card load (2026-10-24, 2026-10-25), not thermal
-  (GPUs <= 70 C): power delivery suspected (new PSU pending; 100 W cap stays). TP2 prefill ring hang S10 open.
+  (GPUs <= 70 C): power delivery suspected. GPU power cap 100 W permanent (user decision 2026-10-30). TP2 prefill ring hang S10 open.
 - **TOP PRIORITY (user, 2026-10-26): native EXL3** (no conversion; keep MTP + vision; fast mul1):
   `native-exl3-plan.md`.
-- **Next (after / alongside):** HANDOFF.md §9 — KVarN 130k prefill (job40 ready), KVarN 200k decode profile, K6V5/K6V4,
-  S10 soak, API suite (needs pip permission), single-card release config, throughput levers (open-paths.md).
+- **Plan (user-decided order, 2026-10-30):** 0. (native EXL3, referenced in TOP PRIORITY above; continues after / alongside all 11 steps below) 1. Fast mul1 decode (open-paths #7); 2. Native EXL3 loader (plan steps 1-3); 3. Sage's own MTP head; 4. MTP verify-step anomaly (2-token step cost); 5. Prefill: two-card time breakdown + balance fix; 6. EXL3 GEMM rewrite for energy per FMA; 7. Short-prompt prefill (stop re-streaming cached experts); 8. KVarN-6 fixes (prefill > 64k, decode at 200k); 9. Sparse-attention track (micro-blocks M1-M2 first); 10. Vision.
 
 ## Where we are (2026-10-19) — SUPERSEDED 2026-10-26 (see above)
 

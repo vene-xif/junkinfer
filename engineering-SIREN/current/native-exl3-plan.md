@@ -277,7 +277,6 @@ ops), i.e. Sage could beat today's Qwen3.6 numbers.
 | MTP verify-step anomaly | 2-token steps cost more than 3-token steps (q8: 41.6 vs 35.8 ms, vbench 2026-10-24) | profile the nt=2 path (`vb.sh`, `JI_PROFILE_GPU`) — likely a kernel variant / workgroup split chosen badly for nt=2 | MTP gain grows (most steps are 2-token) |
 | expert misses over PCIe | hit rate ~93-94 % short; misses stream from pinned host memory | bigger effective cache: KVarN-6 frees KV VRAM once its prefill bug is fixed; per-model TP hot set; `JI_TP_FRAC` tuning per model | decode at depth |
 | prefill GEMM efficiency | ~45 % of peak, barrier / LDS-latency bound | double-buffered LDS in the EXL3 GEMM | prefill +20-40 % |
-| power cap | 100 W per GPU (PSU) | new PSU, re-verify at 145 W, remove the udev cap | prefill ~ watts (+30-45 %) |
 | sparse attention | decode 32.4 t/s at 200k | post-MVP track (`open-paths.md`: micro-blocks M1-M2 first) | long-context decode |
 
 ## 6. Effort summary

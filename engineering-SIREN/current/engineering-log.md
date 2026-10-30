@@ -1798,3 +1798,35 @@ The web UI and short tests were fine. A Hermes-side probe (its `real_body.bin`) 
 **Evidence.** conv_switch_test ALL PASS: Sage MTP off, Qwen3.6 MTP on. Hermes payload interleaved with another
 conversation: 5/5 parsed tool calls (Sage), 6/6 repeated; SSE streaming 4/4. smoke_api ALL PASS (prefill 548 t/s).
 Steady decode unaffected; after a switch the KV-tail expert slots refill.
+
+## 2026-10-31 — Decode slowdown after a large prefill (bug 24b) fixed: huge-page host imports (engine 104fa96)
+
+**Problem.** Decode is 20-25 % slower (~7-9 % after the CPU governor fix on 2026-10-23) after a large prefill,
+until restart. In job 41: fresh 38.8 / 44.4 / 40.9 t/s, after a 21.7k-token prefill 36.0 / 40.5 / 37.8 t/s.
+JDE profile: GPU time per token 21.85 -> 23.40 ms, host "post" 0.81 -> 2.24 ms (all extra time in vkQueueSubmit).
+
+**Diagnosis.**
+- Cache update phase profiling (JI_PROFILE line "cache update phases") showed all extra host time in the
+  vkQueueSubmit of the expert-fill batch: 0.7 -> 2.1 ms. Not a spinning thread, not BO count (freeing prefill
+  command buffers 1455 -> 405 BOs with no change), not RADV global BO list (disabling it: no change).
+- `perf` revealed kernel time tripled in `hmm_vma_handle_pte / vm_normal_page / pte_val` after the prefill. **amdgpu
+  faults through every page of userptr BOs on each submit.** The first large two-card prefill imports a 134 MiB
+  exchange buffer (pf_xh) made of 4 KiB pages: ~33k pages walked per submit.
+
+**Fix.** Imported host buffers (prefill exchange, TP decode exchange, split-logits buffer) are allocated
+2 MiB-aligned with MADV_HUGEPAGE and pre-faulted (`jde_host_alloc`; JI_HOST_THP=0 restores old behavior).
+Also: prefill command buffers freed and their pools trimmed after each prefill (1455 -> 405 BOs).
+
+**Evidence** (TP2, 100 W, spectest 1024 tokens rewrite / story / explain; engine 104fa96):
+- Sage fresh 38.7 / 44.4 / 40.8 -> 39.6 / 46.0 / 41.9 t/s (+2 % average); after a 21.7k prefill 35.7 / 40.5 / 37.7 ->
+  39.3 / 45.5 / 41.6 (within 1 % of fresh; was -7 to -9 %). Expert-fill submit 0.73 -> 0.12 ms fresh, 2.1 -> 0.18 ms
+  after a prefill.
+- Qwen3.6 TP2 + MTP: 51.6 / 61.1 / 55.8 -> 53.9 / 64.6 / 58.8 t/s, greedy outputs identical.
+- Prefill unchanged: 6.8k 543 t/s, 21.7k 489 t/s.
+- smoke_api and scripts/conv_switch_test.py ALL PASS.
+
+**Lesson (for porting notes).** On amdgpu, every host buffer imported into a GPU (userptr) costs page-walk time on
+every submit; use huge pages for imports and keep them few.
+
+**User decision (2026-10-30).** The GPU power cap stays at 100 W permanently, even after the PSU swap. All targets
+(decode >= 80 t/s, prefill >= 1000 / >= 500 at 262k) are to be met at 100 W.
