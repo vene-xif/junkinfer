@@ -119,9 +119,11 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
     export JI_MTP_VOCAB_FILE=${JI_MTP_VOCAB_FILE:-$REF/hyperqwen_draft_vocab_40960.json} JI_MTP_HEAD_TYPE=${JI_MTP_HEAD_TYPE:-iq4_nl}
     # an exllamav3 checkpoint directory brings its own MTP layer: "<dir>::mtp" = its MTP view (native loader; the EXL3
     # MTP block re-quantized to IQ4_NL / Q5_K / Q6_K / Q8_0 at load); a GGUF model uses the Qwen3.6 sidecar
-    if [ -d "$MODEL" ]; then DEF_MTP="$MODEL::mtp"; else DEF_MTP="$(dirname "$MODEL")/mtp-IQ4_NL.v2.gguf"; fi
+    # draft p-min: Sage-A1.5's own head 0.8 (2026-10-31 sweep 0.5 / 0.65 / 0.8 / 0.9 / 0.95: rewrite / story / explain
+    # 43.1 / 62.2 / 51.9 .. 47.6 / 63.7 / 55.9 .. 43.7 / 61.5 / 51.7 t/s), the Qwen3.6 sidecar 0.5
+    if [ -d "$MODEL" ]; then DEF_MTP="$MODEL::mtp"; DEF_PMIN=0.8; else DEF_MTP="$(dirname "$MODEL")/mtp-IQ4_NL.v2.gguf"; DEF_PMIN=0.5; fi
     MTP_ARGS=(-md "${JI_MTP_MODEL:-$DEF_MTP}" --spec-type draft-mtp -ngld 0 -devd none
-              --no-spec-draft-backend-sampling --spec-draft-n-max 1 --spec-draft-p-min "${JI_MTP_PMIN:-0.5}")
+              --no-spec-draft-backend-sampling --spec-draft-n-max 1 --spec-draft-p-min "${JI_MTP_PMIN:-$DEF_PMIN}")
   fi
   exec "$ENGINE/llama-server" -m "$MODEL" \
     -ngl 99 "${EXPERT_ARGS[@]}" --no-repack --load-mode none -fa on --fit off \
