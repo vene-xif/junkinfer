@@ -2,7 +2,7 @@
 
 Status: **opt-in (`JI_KVARN=1`), quality gate pending**. Engine: 356031b68 (simulation), 21a180646 (`attn_kvr6`),
 ac2eed747 (integration), plus 2026-10-23 fixes (rings at init, state-hook view tensors, attach before state load).
-History: engineering log 2026-10-18 (late night), 2026-10-23, 2026-10-31 (from-scratch item resolved as harness artefact).
+History: engineering log 2026-10-18 (late night), 2026-10-23, 2026-10-31 (from-scratch defect confirmed through the JDE prefill: 130k KL 0.118).
 
 ## What it is
 
@@ -108,11 +108,15 @@ teardown and on fatal signals. See `features/README.md` (operational hazards).
 
 KL gate (`kl.sh L_code 0 JI_TP=2 JI_KVARN=1`, vs our full-attention q8_0 reference; q8 baseline 0.00020): **pending**.
 
-## From-scratch quality (2026-10-31, resolved)
+## From-scratch quality (2026-10-31: defect confirmed, open)
 
 **Earlier concern:** 130k from-scratch prefill scored KL 0.27 in the harness. Root cause: the KL harness (`~/jt/kl_v2.sh`) never set `JI_JPF=1`, so all prefills used the ggml graph-path engine, which does not build KVarN records or the window ring. A saved state from graph-path prefill had buffer corruption (rel. error 1.000 everywhere), while the tail through decode matched q8_0 to digit; the high KL was thus meaningless.
 
-**Resolution:** With JDE prefill (now default in the harness): Qwen 32k from scratch, single card, sparse off — q8_0 KL 0.00071 / top1 0.9971, KVarN 0.00092 / top1 0.9893. KVarN from-scratch is correct. A 130k TP2 confirmation run (job88) is pending. The graph-path prefill artefact had been tested with many dead-end knobs (`JI_PF_CBALL`, `JI_ELASTIC=0`, `JI_STATIC=0`, `JI_KVR_PFT=1`, in-process state reload) — all bit-identical, confirming that the path itself was the problem.
+**Status (job88, 2026-10-31):** with the harness fixed (`JI_JPF=1`) the defect is real: TP2, default sparse, 130k from
+scratch through the JDE prefill: q8_0 KL 0.00123, KVarN **0.118** (top1 0.906). 32k from scratch is fine (q8 0.00071,
+KVarN 0.00092, single card, sparse off); restored states decode fine at every length. The graph-path runs (KL ~2,
+empty saved states) were a separate harness artefact, not this defect. Open: bisect by depth (64k / 98k) with the
+JDE prefill, then compare a saved from-scratch state per layer / cell (`kvrblk.py`).
 
 ## Porting notes
 

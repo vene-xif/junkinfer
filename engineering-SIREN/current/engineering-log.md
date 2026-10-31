@@ -1995,15 +1995,15 @@ Step 7 partly done (narrow tiles).
 - `JI_PF_NARROW=0`: KL 0.00015 / p99 0.0024 / max 0.013 / top1 0.9990, tail 13.5 s
 - `JI_PF_NARROW=1`: KL 0.00012 / p99 0.0023 / max 0.007 / top1 1.0000, tail 13.1 s
 
-**Correctness:** narrow tiles are clean. The earlier step-7 log entry's correctness line stands with the caveat (added now): "KL 0.00036 was measured tail-via-decode; through-prefill variant shows 0.00012–0.00015 (above)."
+**Correctness:** narrow tiles are clean. The earlier step-7 log entry's correctness line stands with the caveat (added now): "KL 0.00036 was measured through the ggml graph-path prefill (harness without JI_JPF, and ubatch 256 too small for the JDE prefill scratch); through the JDE prefill: 0.00012–0.00015 (above)."
 
-### KVarN from-scratch item resolved
+### KVarN from-scratch item: graph-path detour, then confirmed real
 
-**Status change:** Open work "KVarN-6: prefill from scratch beyond ~64k is wrong (130k: KL 0.27 at 130k)" closes as a **harness artefact**. The KL harness used the graph-path prefill, which does not build KVarN records or the window ring; a saved state compared per layer/cell against a reference (kvrblk.py) had relative error 1.000 everywhere (i.e., buffers were empty or garbage), while the tail through the graph-path prefill matched q8_0 to every digit.
+**Status change:** Open work "KVarN-6: prefill from scratch beyond ~64k is wrong (130k: KL 0.27 at 130k)" looked like a **harness artefact** at first (see below) - but job88 (end of this entry) confirms the defect is real through the JDE prefill. The KL harness used the graph-path prefill, which does not build KVarN records or the window ring; a saved state compared per layer/cell against a reference (kvrblk.py) had relative error 1.000 everywhere (i.e., buffers were empty or garbage), while the tail through the graph-path prefill matched q8_0 to every digit.
 
-**With JDE prefill:** Qwen 32k from scratch, single card, sparse off: q8_0 KL 0.00071 / top1 0.9971, KVarN 0.00092 / top1 0.9893. KVarN works from scratch. A 130k TP2 confirmation run (job88) is in progress — write "130k confirmation pending" in the docs once it completes.
+**With JDE prefill:** Qwen 32k from scratch, single card, sparse off: q8_0 KL 0.00071 / top1 0.9971, KVarN 0.00092 / top1 0.9893. KVarN works from scratch. **job88 (TP2, default sparse, JDE prefill: 32 batches, 0 graph fallbacks), 130k from scratch: q8_0 KL 0.00123 / top1 0.9883 (= documented 0.00125); KVarN 0.118 / top1 0.906 - the defect is real (the old TP2 number) and lies in the JDE prefill KVarN path between 32k and 130k. The graph-path runs above were a separate artefact. Next: depth bisect 64k / 98k with JI_JPF=1, then kvrblk.py on a saved from-scratch state.**
 
-**Production validation:** The 130k "from scratch" q8_0 KL numbers measured today (0.0064 exact, 0.0089 default sparse; identical on the 10-24 engine d9909dc) were graph-path prefill + JDE decode, not production. Production long-context quality was not regressed (same numbers on the old engine).
+**Production validation:** The 130k "from scratch" q8_0 KL numbers measured today (0.0064 exact, 0.0089 default sparse; identical on the 10-24 engine d9909dc) were graph-path prefill + JDE decode, not production. Through the JDE prefill (job88) production q8 is KL 0.00123 at 130k, the documented value: not regressed.
 
 **Dead ends recorded** (all on graph-path artefact): compute-buffer slot eviction (`JI_PF_CBALL`), `JI_ELASTIC=0`, `JI_STATIC=0`, `JI_KVR_PFT=1`, in-process state reload — all bit-identical.
 
