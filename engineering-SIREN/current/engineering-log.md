@@ -1946,7 +1946,7 @@ Step 8 closed.
 
 2. **Variant dispatch:** `pf_rowmap.comp` gained a third tile list (binding 5, narrow tiles, push constants NR / off3). Environment: `JI_PF_NARROW` (default 1; 0 = old pf_mm_id32 path). Benchmarks from `lab/mmbench` (mmbench.cpp + build.sh): runs prefill routed-expert GEMMs on synthetic EXL3 experts with skewed routing. Kernel sets given as "spv:maxrows,..." (each expert's rows cut into tiles of the largest kernel; remainders to the smallest kernel that holds them). Max |d| checked vs the first variant; one projection timed, RADV_DEBUG=shaderstats prints VGPRs.
 
-**Baseline metrics** (gate 2048->512, 200 experts, 100 W, bench not running yet):
+**Baseline metrics** (gate 2048->512, 200 experts, 100 W, production kernels):
 - 150 tokens: 4.45 ms (282 GFMA/s useful)
 - 1000 tokens: 6.7 ms (1260 GFMA/s)
 - 4000 tokens: 19.8 ms (1696 GFMA/s)
@@ -1955,10 +1955,10 @@ Step 8 closed.
 **Ablation findings:**
 - **Large 64-column tiles:** FMA loop runs near FMA peak; decode ~8 %; the rest of overhead (~28 % total: staging, LDS round trips, barriers, Hadamard epilogue) is VALU work that cannot overlap the FMA loop.
 - **Small tiles in pf_mm:** Each wave gets 8 columns (pf_mm dispatch), so a tile with a few rows keeps one wave of the 4 busy with FMAs, and each thread re-reads decoded weights from LDS per column (LDS-bound).
-- **Narrow tile variant:** 4 stripes per pass, each lane keeps its x registers across 4 columns → lower LDS pressure, all lanes do FMAs. Trade-off: narrower per-tile K-loop iteration count (K/4 passes for 4 stripes).
+- **Narrow tile variant:** a lane decodes its 4 tile positions of 4 stripes (16-output groups) per k tile into registers; its 4 x rows of every token are read from LDS once per k tile and reused over the 4 stripes; every decoded weight feeds all of the tile's rows (tokens). All 4 waves work (each takes a quarter of K); 2 passes cover the 8 stripes of a 128-output block.
 
-**Bench results** (Sage, prefill gate 2048->512, baseline all-pf_mm_id32):
-- 150 tokens: 4.45 -> 2.52 ms (gate), down (512->2048 gate, full prefill) 4.35 -> ~2.4 ms
+**Bench results** (one projection over 200 experts; baseline = production pf_mm_id + pf_mm_id32):
+- 150 tokens: gate / up (K 2048 -> 512) 4.45 -> 2.52 ms; down (K 512 -> 2048) 4.35 -> ~2.4 ms
 - 500 tokens: -5 to -7 %
 - >= 1000 tokens: ~1-3 %
 
