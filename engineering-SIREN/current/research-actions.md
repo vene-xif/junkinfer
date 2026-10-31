@@ -7,7 +7,27 @@
 > report B = "Long-context KV compression, sparse attention, Qwen4 readiness" (prompt 3);
 > report C = "Two-GPU tensor parallelism over weak PCIe without P2P" (prompt 2; written for a dense 27B, out of scope).
 
-## Ranked actions
+## Plan order (user-agreed 2026-10-31)
+
+1. **Routing traces** (in progress): JDE `JI_ROUTE_LOG=<dir>` logs every decoded token's router top-8 ids, weights and
+   the per-layer MoE input x (fp16) - enabled on the production server so real workloads accumulate on the HDD
+   (`~/traces`, cap `JI_ROUTE_LOG_MAX_GB`, default 150). Reader: `tools/routes/read_trace.py`. Corpus traces through
+   the prefill path later, when the GPUs are free. First datum: 34 % of a token's (layer, expert) selections repeat
+   the previous token's.
+2. Decode-kernel lab bench + contiguous activation reads in `x3_mv` (action #2 below).
+3. **Trace simulation** (offline, VENE CPU): our cache policy vs perfect-knowledge Belady vs router lookahead
+   (layer L+1 / L+2 routers applied to layer L's hidden state) vs MTP-draft prefetch -> the real upper bound of
+   expert prefetch, before engine work.
+4. **Router-lookahead expert prefetch**: predicted misses copied into cache slots by the async fill queue (DMA)
+   1-2 layers ahead (a layer ~0.5 ms; an expert ~0.13 ms over x16), plus MTP-draft token prefetch. Estimated
+   +15-30 % decode (bounded by miss bytes / PCIe bandwidth; decode is ~16 ms experts of ~20 ms per token).
+5. MTP speculative sampling at temperature > 0 (action #3).
+6. **Learned lookahead predictor on the hidden state** (not the KV cache): a small network trained on the traces to
+   predict experts several layers / tokens ahead, compared against the routers' own lookahead on the same traces.
+   (User: the router is optimized for the current token only - a predictor trained for multi-step lookahead may win.)
+7. Integer accumulate / `v_sad_u8` in decode (actions #4-5), then the register-decoded prefill GEMM (action #6).
+
+## Ranked actions (kernel / sampling details)
 
 | # | Action | Source | Expected gain | Effort | Status |
 |---|---|---|---|---|---|
