@@ -1,0 +1,186 @@
+#version 450
+// mv_id: routed-expert linear for narrow tiles (an expert's <= NT rows), the mat-vec way (x3_mv.comp's decode) instead
+// of pf_mm's LDS-staged GEMM. Same bindings / push constants as pf_mm (MMID + X3F), drop-in for the small tiles.
+// Workgroup = 4 waves = one 128-output Hadamard block (8 stripes of 16 outputs) of one tile (expert, n <= NT rows);
+// wave w takes the k tiles [w KT/4, (w+1) KT/4). Per k tile a wave decodes the tiles of S stripes at that k (lane l:
+// positions 4l..4l+3 = one output column, input rows r0, r0+1, r0+8, r0+9 - exllamav3's fragment shuffle) and reuses
+// its 4 x rows of every token (from LDS, [k][token]) over the S stripes; each decoded weight feeds n FMAs.
+// End: column sums over the 4 lanes of a column, the 4 waves' K parts summed in LDS, Hadamard-128 along the outputs,
+// * svh / sqrt(128) * routing weight, store.
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_integer_dot_product : require
+
+#ifndef BITS
+#define BITS 4
+#endif
+#ifndef NT
+#define NT 8            // max rows (tokens) per tile
+#endif
+#ifndef S
+#define S 4             // stripes per pass (x reuse); 8 / S passes over the k range
+#endif
+#ifndef CHK
+#define CHK 4           // k tiles per x staging batch
+#endif
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 0) const uint CB = 0u;
+
+const uint TW = 8u * BITS, LB = 256u * BITS;
+const uint NQ = (NT + 3u) / 4u;       // vec4 of tokens per k row
+
+layout (binding = 0) readonly buffer A {uvec4 data_a4[];};
+layout (binding = 1) readonly buffer B {vec4 data_b[];};
+layout (binding = 2) buffer D {float data_d[];};
+layout (binding = 3) readonly buffer IDS {int data_ids[];};
+layout (binding = 4) readonly buffer RowMap {uint data_row_map[];};
+layout (push_constant) uniform parameter {
+    uint M; uint N; uint K; uint stride_a; uint stride_b; uint stride_d;
+    uint batch_stride_a; uint batch_stride_b; uint batch_stride_d;
+    uint nei0; uint nei1; uint nbi1; uint ne11; uint n_experts; uint row_ids_offset;
+    uint sv_estride; uint sv_f16;
+    uint w_on; uint w_tok;
+    uint n0; uint yo; uint kt0; uint KTF; uint accum; uint sv_base;
+} p;
+layout (binding = 5) readonly buffer SV {uint sv[];};
+layout (binding = 6) readonly buffer WT {float wts[];};
+
+float svh(uint i) {
+    if (p.sv_f16 != 0u) { const vec2 q = unpackHalf2x16(sv[i >> 1]); return (i & 1u) != 0u ? q.y : q.x; }
+    return uintBitsToFloat(sv[i]);
+}
+float mcg(uint v) {
+    uint x = v * 0xCBAC1FEDu;
+    x = (x & 0x8fff8fffu) ^ 0x3b603b60u;
+    const f16vec2 hh = unpackFloat2x16(x);
+    return float(hh.x + hh.y);
+}
+float mul1(uint v) { return float(dotPacked4x8EXT(v * 0x83DCD12Du, 0x01010101u)) * 0.00676727294921875 - 3.453125; }
+float cbv(uint v) { return CB == 1u ? mul1(v) : mcg(v); }
+uint w32(uint a, uint b, uint rel) { return rel == 0u ? a : (a << rel) | (b >> (32u - rel)); }
+
+// per wave: x batch [CHK * 16 k][NQ vec4 of tokens], tile words of the current k tile [S][TW]; the block's sums
+// over the 4 waves' K parts [128][NT] (the waves add in turn)
+const uint XW = CHK * 16u * NQ;                 // vec4 per wave
+shared vec4 xs[4][XW];
+shared uint tl[4][S * TW];
+shared float red[128 * NT];
+
+void main() {
+    const uint lane = gl_SubgroupInvocationID, wv = gl_SubgroupID;
+    const uint tile_idx = gl_WorkGroupID.y + gl_WorkGroupID.z * gl_NumWorkGroups.y;
+    if (tile_idx >= data_row_map[0]) return;
+    const uint expert = data_row_map[1u + 2u * tile_idx];
+    const uint n = min(data_row_map[2u + 2u * tile_idx], NT);
+    const uint row0 = gl_WorkGroupID.x * 128u;                    // output block within the window
+    const uint mat0 = expert * (p.batch_stride_a / 256u) * TW;    // word offset of the expert's tiles
+    const uint KT = p.K / 16u, KTW = KT / 4u, kw0 = wv * KTW;     // this wave's k tiles [kw0, kw0 + KTW)
+
+    // the tile's input rows: B row offsets (floats)
+    uint bb[NT];
+    [[unroll]] for (uint q = 0; q < NT; ++q) {
+        const uint packed = q < n ? data_row_map[p.row_ids_offset + tile_idx * NT + q] : data_row_map[p.row_ids_offset + tile_idx * NT];
+        bb[q] = (packed >> 16) * p.batch_stride_b + ((packed & 0xffffu) % p.ne11) * p.stride_b;
+    }
+    // lane constants (x3_mv): column, rows, bit offsets of the 4 windows
+    const uint lq = lane / 2u, bse = lq & ~4u, odd = (lq >> 2) & 1u;
+    const uint r0 = (bse % 4u) * 2u;
+    const uint col = 2u * (bse / 8u + 4u * (lane % 2u)) + odd;
+    const uint s0 = ((lane * 4u + 257u) * BITS - 16u) % LB;
+    const uint wa = s0 / 32u, wb = (wa + 1u) % TW, wc = (wa + 2u) % TW, rel0 = s0 % 32u;
+
+    for (uint ps = 0; ps < 8u / S; ++ps) {
+        float acc[S][NT];
+        [[unroll]] for (uint s = 0; s < S; ++s) [[unroll]] for (uint q = 0; q < NT; ++q) acc[s][q] = 0.0;
+        // tile words of k tile kt (S stripes, 16-byte loads: one per lane for S = 8) and x of the batch at k tile kb are
+        // loaded one step ahead into registers (in flight during the previous step's decode)
+        const uint TU = S * TW / 4u, XE = (NT * CHK * 4u + 63u) / 64u;
+#define TLOAD(kt) (lane < TU ? data_a4[(mat0 + (((p.n0 + row0) / 16u + ps * S + lane / (TW / 4u)) * p.KTF + p.kt0 + (kt)) * TW) / 4u + lane % (TW / 4u)] : uvec4(0u))
+#ifndef PF
+#define PF 0            // 1: the next k tile's words / x batch prefetched into registers (more VGPRs: slower on gfx8)
+#endif
+        uvec4 wn = PF != 0 ? TLOAD(kw0) : uvec4(0u);
+        vec4 xn[XE];
+#define XLOAD(kb) { [[unroll]] for (uint u = 0; u < XE; ++u) { const uint e = lane + 64u * u, q = e / (CHK * 4u), i = e % (CHK * 4u); \
+            xn[u] = e < NT * CHK * 4u && q < n ? data_b[(bb[min(q, NT - 1u)] + (kb) * 16u) / 4u + i] : vec4(0.0); } }
+        if (PF != 0) XLOAD(kw0);
+        for (uint kt0w = 0; kt0w < KTW; ++kt0w) {
+            const uint kk = kt0w % CHK;
+            if (kk == 0u) {   // stage the batch's x: xs[k][q / 4][q % 4]
+                if (PF == 0) XLOAD(kw0 + kt0w);
+                [[unroll]] for (uint u = 0; u < XE; ++u) {
+                    const uint e = lane + 64u * u, q = e / (CHK * 4u), i = e % (CHK * 4u);
+                    if (e < NT * CHK * 4u) [[unroll]] for (uint c = 0; c < 4u; ++c) xs[wv][(i * 4u + c) * NQ + q / 4u][q % 4u] = xn[u][c];
+                }
+                if (PF != 0 && kt0w + CHK < KTW) XLOAD(kw0 + kt0w + CHK);
+            }
+            if (PF == 0) wn = TLOAD(kw0 + kt0w);
+            if (lane < TU) [[unroll]] for (uint c = 0; c < 4u; ++c) tl[wv][lane * 4u + c] = wn[c];
+            subgroupMemoryBarrierShared(); subgroupBarrier();
+            if (PF != 0 && kt0w + 1u < KTW) wn = TLOAD(kw0 + kt0w + 1u);
+            {
+                const uint xk = kk * 16u + r0;
+                vec4 x0[NQ], x1[NQ], x8[NQ], x9[NQ];
+                [[unroll]] for (uint j = 0; j < NQ; ++j) {
+                    x0[j] = xs[wv][(xk) * NQ + j]; x1[j] = xs[wv][(xk + 1u) * NQ + j];
+                    x8[j] = xs[wv][(xk + 8u) * NQ + j]; x9[j] = xs[wv][(xk + 9u) * NQ + j];
+                }
+                [[unroll]] for (uint s = 0; s < S; ++s) {
+                    const uint a = tl[wv][s * TW + wa], b = tl[wv][s * TW + wb];
+                    const uint f0 = w32(a, b, rel0);
+                    const uint f1 = BITS <= 5u ? f0 : BITS == 6u ? (rel0 + 12u < 32u ? w32(a, b, rel0 + 12u) : b << (rel0 - 20u))
+                                  : (rel0 + 2u * BITS < 32u ? w32(a, b, rel0 + 2u * BITS) : w32(b, tl[wv][s * TW + wc], rel0 + 2u * BITS - 32u));
+                    const float w0 = cbv(f0 >> 16);
+                    const float w1 = cbv((f0 >> (16u - BITS)) & 0xFFFFu);
+                    const float w2 = cbv(BITS <= 5u ? (f0 >> (16u - 2u * BITS)) & 0xFFFFu : (f1 >> 16));
+                    const float w3 = cbv(BITS <= 5u ? (f0 >> (16u - 3u * BITS)) & 0xFFFFu : (f1 >> (16u - BITS)) & 0xFFFFu);
+                    [[unroll]] for (uint q = 0; q < NT; ++q) {
+                        if (q >= n) break;   // uniform over the workgroup
+                        acc[s][q] += w0 * x0[q / 4u][q % 4u] + w1 * x1[q / 4u][q % 4u] + w2 * x8[q / 4u][q % 4u] + w3 * x9[q / 4u][q % 4u];
+                    }
+                }
+            }
+        }
+        // column sums over the 4 lanes sharing a column (lane bits 1, 2)
+        [[unroll]] for (uint s = 0; s < S; ++s) [[unroll]] for (uint q = 0; q < NT; ++q) {
+            float v = acc[s][q];
+            v += subgroupShuffleXor(v, 2u);
+            v += subgroupShuffleXor(v, 4u);
+            acc[s][q] = v;
+        }
+        // the 4 waves' K parts, added in turn: red[out][q], out = stripe * 16 + col ((lane & 6) == 0 holds a column)
+        for (uint w = 0; w < 4u; ++w) {
+            barrier();
+            if (wv == w && (lane & 6u) == 0u) {
+                [[unroll]] for (uint s = 0; s < S; ++s) [[unroll]] for (uint q = 0; q < NT; ++q) {
+                    const uint i = ((ps * S + s) * 16u + col) * NT + q;
+                    red[i] = w == 0u ? acc[s][q] : red[i] + acc[s][q];
+                }
+            }
+        }
+    }
+    barrier();
+    // ---- per token (wave wv: tokens wv, wv + 4, ..): elements t = lane, lane + 64 of the block, Hadamard-128, scale, store
+    // the row map's scale table: the expert id of the tile (its weights may sit in a cache slot: [1 + 2 i] is the slot)
+    const uint sv0 = p.sv_base + data_row_map[1u + 2u * ((p.row_ids_offset - 1u) / 3u) + tile_idx] * p.sv_estride + p.n0 + row0;
+    const float s_a = svh(sv0 + lane) * 0.08838834764831845, s_b = svh(sv0 + lane + 64u) * 0.08838834764831845;
+    for (uint q = wv; q < n; q += 4u) {
+        float v0 = 0.0, v1 = 0.0;
+        v0 = red[lane * NT + q]; v1 = red[(lane + 64u) * NT + q];
+        { const float a = v0, b = v1; v0 = a + b; v1 = a - b; }
+        for (uint h = 1u; h < 64u; h <<= 1) {
+            const float o0 = subgroupShuffleXor(v0, h), o1 = subgroupShuffleXor(v1, h);
+            v0 = (lane & h) == 0u ? v0 + o0 : o0 - v0;
+            v1 = (lane & h) == 0u ? v1 + o1 : o1 - v1;
+        }
+        const uint packed = data_row_map[p.row_ids_offset + tile_idx * NT + q];
+        const uint slot = packed & 0xffffu, tok = packed >> 16;
+        const uint dbase = tok * p.batch_stride_d + slot * p.stride_d + p.yo + row0;
+        const float wgt = p.w_on != 0u ? wts[tok * p.w_tok + slot] : 1.0;
+        const float r_a = v0 * s_a * wgt, r_b = v1 * s_b * wgt;
+        if (p.accum != 0u) { data_d[dbase + lane] += r_a; data_d[dbase + lane + 64u] += r_b; }
+        else { data_d[dbase + lane] = r_a; data_d[dbase + lane + 64u] = r_b; }
+    }
+}

@@ -1,0 +1,288 @@
+#version 450
+// JDE prefill (copied from ggml-vulkan mul_mm_gcn_exl3.comp, X3F path): + windows for tensor parallelism: output rows
+// [n0, n0 + M) of the weight (tile stripes n0 / 16 .., svh n0 ..), stored at output row yo + local row; K window: the
+// K / 16 tiles starting at tile column kt0 of stripes KTF tiles wide (K-part partial sums).
+// JunkInfer: GEMM for GCN with EXL3 trellis weights (codebook CB: mcg / mul1, BITS 2..8 per weight) x f32 activations,
+// without an f16 copy of the weights: D[col][row] = sum_k W_hat[k][row] * B[col][k] (the graph applies the
+// Hadamard / suh / svh stages around it). Same tiling as mul_mm_id_gcn.comp: 128 weight rows (= outputs) x 32
+// columns per workgroup, 256 threads, 4x4 register blocks. Per 32-wide k step the 16 trellis tiles covering
+// 128 outputs x 32 inputs are staged into LDS (coalesced), then each thread decodes 4 position groups (16 weights)
+// straight into the A tile. Tiles are stored [N/16][K/16] per matrix (8*BITS words each).
+// MMID: MUL_MAT_ID with ggml's row map (count_experts), bindings and push constants of the mul_mm_id pipelines.
+// Otherwise MUL_MAT: workgroup y = 32-column block of B (contiguous f32 rows of K), D rows of M floats.
+// X3F (fused EXL3 op): B was transformed by x3g_prep; the epilogue applies the output Hadamard over the tile's 128 rows
+// (one Hadamard block) and the svh scale (per expert with MMID), so the op computes the whole EXL3 linear.
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_integer_dot_product : require
+
+#ifndef BITS
+#define BITS 4
+#endif
+
+#ifdef T128
+#define NTH 128u   // threads; 8 rows x CPT columns per thread (half the LDS reads per FMA)
+#define RPT 8u
+#elif defined(R8)
+#define NTH 256u   // 256 threads, 8 rows x CPT columns each (with BN128: 8 x 8 register tiles)
+#define RPT 8u
+#else
+#define NTH 256u
+#define RPT 4u
+#endif
+layout(local_size_x = NTH, local_size_y = 1, local_size_z = 1) in;
+
+const uint TW = 8u * BITS;   // words per tile
+const uint LB = 256u * BITS;
+#if defined(BN128)
+const uint BM = 128u, BN = 128u;    // 128 columns (dense prefill): a quarter of the decode per FMA
+#elif defined(BN64)
+const uint BM = 128u, BN = 64u;    // 64 columns: half the trellis decode per FMA (MoE: ~64 rows per expert)
+#else
+const uint BM = 128u, BN = 32u;
+#endif
+#ifdef BK16
+const uint BK = 16u;          // half-depth k steps: half the LDS and fewer live registers (occupancy)
+#else
+const uint BK = 32u;
+#endif
+const uint KTS = BK / 16u;    // k tiles per step
+const uint EC = BK;           // columns per epilogue group (X3F)
+const uint NTS = (BM / 16u) * KTS;   // trellis tiles per step
+const uint TR = BM / RPT;     // threads along the rows
+const uint TC = NTH / TR;    // threads along the columns
+const uint CPT = BN / TC;    // columns per thread
+const uint RQ = RPT / 4u;    // vec4 of rows per thread
+const uint NTW = NTS * TW;   // words of the step's tiles
+const uint WPT = (NTW + NTH - 1u) / NTH;  // words per thread to stage
+
+layout (binding = 0) readonly buffer A {uint data_a[];};
+layout (binding = 1) readonly buffer B {vec4 data_b[];};
+layout (binding = 2) writeonly buffer D {float data_d[];};
+#ifdef MMID
+layout (binding = 3) readonly buffer IDS {int data_ids[];};
+layout (binding = 4) readonly buffer RowMap {uint data_row_map[];};
+layout (push_constant) uniform parameter {
+    uint M; uint N; uint K; uint stride_a; uint stride_b; uint stride_d;
+    uint batch_stride_a; uint batch_stride_b; uint batch_stride_d;
+    uint nei0; uint nei1; uint nbi1; uint ne11; uint n_experts; uint row_ids_offset;
+#ifdef X3F
+    uint sv_estride; uint sv_f16;
+    uint w_on; uint w_tok;   // MoE routing weight applied in the epilogue: wts[token * w_tok + slot]
+#endif
+    uint n0; uint yo; uint kt0; uint KTF; uint accum; uint sv_base;
+} p;
+#ifdef X3F
+layout (binding = 5) readonly buffer SV {uint sv[];};
+layout (binding = 6) readonly buffer WT {float wts[];};
+#endif
+#else
+layout (push_constant) uniform parameter { uint M; uint N; uint K; uint stride_b; uint stride_d;
+#ifdef X3F
+    uint sv_estride; uint sv_f16;
+#endif
+    uint n0; uint yo; uint kt0; uint KTF; uint accum; uint sv_base;
+} p;
+#ifdef X3F
+layout (binding = 3) readonly buffer SV {uint sv[];};
+#endif
+#endif
+#ifdef X3F
+float svh(uint i) {
+    if (p.sv_f16 != 0u) { const vec2 q = unpackHalf2x16(sv[i >> 1]); return (i & 1u) != 0u ? q.y : q.x; }
+    return uintBitsToFloat(sv[i]);
+}
+#endif
+
+shared vec4  a_lds[BK * BM / 4];   // [k][row/4]
+shared vec4  b_lds[BK * BN / 4];   // [k][col/4]
+shared uint  tw[NTW];              // the k step's tiles: tile j = stripe (j / KTS), k tile (j % KTS)
+#ifdef MMID
+shared uvec2 row_ids[BN];          // (slot, token)
+#endif
+
+// the codebook value: the two f16 halves summed in f16 (as exllamav3's __hadd), one conversion
+float mcg(uint v) {
+    uint x = v * 0xCBAC1FEDu;
+    x = (x & 0x8fff8fffu) ^ 0x3b603b60u;
+    const f16vec2 hh = unpackFloat2x16(x);
+    return float(hh.x + hh.y);
+}
+uint w32(uint a, uint b, uint rel) { return rel == 0u ? a : (a << rel) | (b >> (32u - rel)); }
+layout(constant_id = 0) const uint CB = 0u;   // codebook: 0 mcg, 1 mul1 (ggml_backend_vk_set_exl3_codebook)
+// mul1 (exllamav3 cb 2): fp16(fma(1024 + byte sum of v * 0x83DCD12D, 0x1eee, 0xc931)). Every value is exact in f32 and
+// already an f16 value (all 65536 inputs checked, lab/cbdecode), so no f16 round trip; the byte sum as a packed dot product
+// (RADV gfx8: SDWA byte adds): 188 -> 247 Gdecode/s on an RX 580, bit-identical (2026-10-31)
+float mul1(uint v) {
+    return float(dotPacked4x8EXT(v * 0x83DCD12Du, 0x01010101u)) * 0.00676727294921875 - 3.453125;
+}
+float cbv(uint v) { return CB == 1u ? mul1(v) : mcg(v); }
+
+void main() {
+    const uint t = gl_LocalInvocationID.x;
+#ifdef MMID
+    const uint tile_idx = gl_WorkGroupID.y + gl_WorkGroupID.z * gl_NumWorkGroups.y;
+    if (tile_idx >= data_row_map[0]) return;
+    const uint expert = data_row_map[1 + 2 * tile_idx];
+    const uint n_rows = data_row_map[2 + 2 * tile_idx];
+    for (uint t2 = t; t2 < BN; t2 += NTH) {
+        const uint t = t2;
+        const uint packed = t < n_rows ? data_row_map[p.row_ids_offset + tile_idx * BN + t] : 0u;
+        row_ids[t] = uvec2(packed & 0xffffu, packed >> 16);
+    }
+    const uint mat0 = expert * (p.batch_stride_a / 256u) * TW;   // word offset of the expert's tiles
+#else
+    const uint col0 = gl_WorkGroupID.y * BN;
+    const uint n_rows = min(BN, p.N - col0);
+    const uint mat0 = 0u;
+#endif
+    const uint row0 = gl_WorkGroupID.x * BM;
+    const uint KT = p.KTF;   // tiles per stripe of the stored weight (the K window reads K / 16 of them from kt0)
+    barrier();
+
+    // compute layout: thread (tr, tc) = rows RPT*tr..+RPT-1 (tr < TR), cols CPT*tc..+CPT-1 (tc < TC)
+    const uint tr = t % TR, tc = t / TR;
+    vec4 acc[CPT][RQ];
+    [[unroll]] for (uint j = 0; j < CPT; ++j) [[unroll]] for (uint q = 0; q < RQ; ++q) acc[j][q] = vec4(0.0);
+
+    // decode layout: thread = tile dj = t / TPT (stripe ds = dj / KTS, k tile dkt = dj % KTS), groups g = t % TPT + TPT i
+    const uint TPT = NTH / NTS;                 // threads per tile
+    const uint dj = t / TPT, ds = dj / KTS, dkt = dj % KTS;
+    // B load layout: thread = (col b_c = t/8 (+NTH/8 u), k quad b_q = t%8)
+    const uint QK = BK / 4u;                    // k quads per step
+    const uint BCP = NTH / QK;                  // columns per load pass
+    const uint b_c = t / QK, b_q = t % QK;
+    const uint NBL = (BN + BCP - 1u) / BCP;     // load passes (threads past BN idle when BCP > BN)
+    uint b_base[NBL];
+    bool b_ok[NBL];
+    [[unroll]] for (uint u = 0; u < NBL; ++u) {
+        const uint c = b_c + BCP * u;
+        b_ok[u] = c < n_rows && c < BN;
+#ifdef MMID
+        const uvec2 rid = row_ids[min(c, BN - 1u)];
+        b_base[u] = rid.y * p.batch_stride_b + (rid.x % p.ne11) * p.stride_b;
+#else
+        b_base[u] = (col0 + c) * p.stride_b;
+#endif
+    }
+
+    // global loads of k step k0 into registers (issued one step ahead: they complete during the previous step's
+    // decode and FMAs)
+    uint wv[WPT];
+    vec4 bv[NBL];
+#define LOAD_STEP(k0) { \
+        [[unroll]] for (uint u = 0; u < WPT; ++u) { \
+            const uint i = t + u * NTH, j = i / TW, s = j / KTS, kt = j % KTS; \
+            const uint tn = row0 / 16u + s; \
+            wv[u] = (k0) < p.K && i < NTW && tn < p.M / 16u ? data_a[mat0 + ((p.n0 / 16u + tn) * KT + p.kt0 + (k0) / 16u + kt) * TW + i % TW] : 0u; } \
+        [[unroll]] for (uint u = 0; u < NBL; ++u) bv[u] = (k0) < p.K && b_ok[u] ? data_b[(b_base[u] + (k0)) / 4u + b_q] : vec4(0.0); }
+    LOAD_STEP(0u)
+    for (uint k0 = 0; k0 < p.K; k0 += BK) {
+        // ---- stage the step's tile words and B quads (loaded during the previous step)
+        barrier();   // previous step's reads are done
+        [[unroll]] for (uint u = 0; u < WPT; ++u) if (t + u * NTH < NTW) tw[t + u * NTH] = wv[u];
+        [[unroll]] for (uint u = 0; u < NBL; ++u) {
+            const uint c = b_c + BCP * u;
+            if (c < BN) [[unroll]] for (uint i = 0; i < 4; ++i) b_lds[(b_q * 4u + i) * (BN / 4u) + c / 4u][c % 4u] = bv[u][i];
+        }
+        barrier();
+        LOAD_STEP(k0 + BK)
+        // ---- decode the thread's position groups of tile dj into a_lds[k][row]
+        [[unroll]] for (uint i = 0; i < 64u / TPT; ++i) {
+            const uint g = t % TPT + TPT * i;               // position group = "lane" of the fragment shuffle
+            const uint lq = g / 2u, bse = lq & ~4u, odd = (lq >> 2) & 1u;
+            const uint r0 = (bse % 4u) * 2u;
+            const uint col = 2u * (bse / 8u + 4u * (g % 2u)) + odd;
+            const uint s0 = ((g * 4u + 257u) * BITS - 16u) % LB;
+            const uint wa = s0 / 32u, wb = (wa + 1u) % TW, rel0 = s0 % 32u;
+            const uint a = tw[dj * TW + wa], b = tw[dj * TW + wb];
+            const uint f0 = w32(a, b, rel0);
+            // BITS <= 5: the 4 windows lie in one 32-bit window; else w2 / w3 from a second one
+            const uint f1 = BITS <= 5u ? f0 : BITS == 6u ? (rel0 + 12u < 32u ? w32(a, b, rel0 + 12u) : b << (rel0 - 20u))
+                          : (rel0 + 2u * BITS < 32u ? w32(a, b, rel0 + 2u * BITS) : w32(b, tw[dj * TW + (wa + 2u) % TW], rel0 + 2u * BITS - 32u));
+            const float v0 = cbv(f0 >> 16);
+            const float v1 = cbv((f0 >> (16u - BITS)) & 0xFFFFu);
+            const float v2 = cbv(BITS <= 5u ? (f0 >> (16u - 2u * BITS)) & 0xFFFFu : (f1 >> 16));
+            const float v3 = cbv(BITS <= 5u ? (f0 >> (16u - 3u * BITS)) & 0xFFFFu : (f1 >> (16u - BITS)) & 0xFFFFu);
+            const uint row = ds * 16u + col, kb = dkt * 16u + r0;
+            a_lds[(kb +  0u) * (BM / 4u) + row / 4u][row % 4u] = v0;
+            a_lds[(kb +  1u) * (BM / 4u) + row / 4u][row % 4u] = v1;
+            a_lds[(kb +  8u) * (BM / 4u) + row / 4u][row % 4u] = v2;
+            a_lds[(kb +  9u) * (BM / 4u) + row / 4u][row % 4u] = v3;
+        }
+        barrier();
+        // columns past n_rows (expert tiles are partly empty) are skipped; tc is uniform per half wave, so a wave
+        // whose columns are all empty leaves its SIMD to the other resident workgroup
+        if (tc * CPT < n_rows) [[unroll]] for (uint kk = 0; kk < BK; ++kk) {
+            vec4 a4[RQ];
+            [[unroll]] for (uint q = 0; q < RQ; ++q) a4[q] = a_lds[kk * (BM / 4u) + tr * RQ + q];
+            [[unroll]] for (uint h = 0; h < CPT / 4u; ++h) {
+                const vec4 b4 = b_lds[kk * (BN / 4u) + tc * (CPT / 4u) + h];
+                [[unroll]] for (uint q = 0; q < RQ; ++q) {
+                    acc[4u * h + 0u][q] += a4[q] * b4.x; acc[4u * h + 1u][q] += a4[q] * b4.y;
+                    acc[4u * h + 2u][q] += a4[q] * b4.z; acc[4u * h + 3u][q] += a4[q] * b4.w;
+                }
+            }
+        }
+    }
+#ifdef X3F
+    // ---- epilogue: per EC-column group (EC = BK: a_lds holds BK x 128), the tile goes to LDS as [col][row] (in a_lds), 128-point Hadamard along
+    // the rows of every column, * svh / sqrt(128), store
+#ifdef MMID
+    // the row map's scale table (pf_rowmap): the expert id of the tile (its weights may sit in a cache slot)
+    const uint sv0 = p.sv_base + data_row_map[1u + 2u * ((p.row_ids_offset - 1u) / 3u) + tile_idx] * p.sv_estride + p.n0 + row0;
+#else
+    const uint sv0 = p.sv_base + p.n0 + row0;
+#endif
+    [[unroll]] for (uint g = 0; g < BN / EC; ++g) {
+        if (g * EC >= n_rows) break;   // uniform: an empty column group needs no Hadamard
+        barrier();
+        [[unroll]] for (uint j = 0; j < CPT; ++j) {
+            const uint c = tc * CPT + j;
+            if (c / EC == g) [[unroll]] for (uint q = 0; q < RQ; ++q) a_lds[(c % EC) * (BM / 4u) + tr * RQ + q] = acc[j][q];
+        }
+        for (uint h = 1u; h < 128u; h <<= 1) {
+            barrier();
+            for (uint q = t; q < EC * 64u; q += NTH) {
+                const uint c = q / 64u, i = q % 64u;
+                const uint lo = (i / h) * 2u * h + (i % h), hi = lo + h;
+                const uint ilo = c * 128u + lo, ihi = c * 128u + hi;
+                const float a = a_lds[ilo / 4u][ilo % 4u], b = a_lds[ihi / 4u][ihi % 4u];
+                a_lds[ilo / 4u][ilo % 4u] = a + b;
+                a_lds[ihi / 4u][ihi % 4u] = a - b;
+            }
+        }
+        barrier();
+        for (uint q = t; q < EC * 128u; q += NTH) {
+            const uint cl = q / 128u, row = q % 128u, c = g * EC + cl;
+            if (c >= n_rows) continue;
+#ifdef MMID
+            const uvec2 r = row_ids[c];
+            const uint dbase = r.y * p.batch_stride_d + r.x * p.stride_d;
+            const float wgt = p.w_on != 0u ? wts[r.y * p.w_tok + r.x] : 1.0;
+#else
+            const uint dbase = (col0 + c) * p.stride_d;
+            const float wgt = 1.0;
+#endif
+            const float val = a_lds[q / 4u][q % 4u] * (0.08838834764831845 * wgt) * svh(sv0 + row);
+            if (p.accum != 0u) data_d[dbase + p.yo + row0 + row] += val; else data_d[dbase + p.yo + row0 + row] = val;
+        }
+    }
+    return;
+#endif
+    // ---- store
+    [[unroll]] for (uint j = 0; j < CPT; ++j) {
+        const uint c = tc * CPT + j;
+        if (c >= n_rows) break;
+#ifdef MMID
+        const uvec2 r = row_ids[c];
+        const uint dbase = r.y * p.batch_stride_d + r.x * p.stride_d;
+#else
+        const uint dbase = (col0 + c) * p.stride_d;
+#endif
+        [[unroll]] for (uint i = 0; i < RPT; ++i) {
+            const uint row = row0 + tr * RPT + i;
+            if (row < p.M) data_d[dbase + row] = acc[j][i / 4u][i % 4u];
+        }
+    }
+}
