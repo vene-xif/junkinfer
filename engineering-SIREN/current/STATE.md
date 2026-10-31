@@ -22,9 +22,8 @@ Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workfl
   Qwen-Sharp chat template, thinking on, auto-restart. `ji-thermal-guard.service` logs GPU temperatures. Verified
   across two reboots; `smoke_api.py` ALL PASS (2026-10-26). Engine 4f5d347ee, project 3f44c65+.
 - **Served model: Sage-A1.5** (since 2026-10-26, user; Qwen3.6 fine-tune, same architecture / tokenizer, EXL3 4.0
-  bpw mul1 codebook): TP2, no MTP (the Qwen3.6 draft head doesn't help it), decode 39.6 / 46.0 / 41.9 t/s
-  (rewrite / story / explain), prefill 541 t/s (6.8k); Qwen3.6 TP2 + MTP: 53.9 / 64.6 / 58.8 (mul1 mat-vecs
-  ~20 % slower). Details HANDOFF.md §2. Qwen3.6 numbers below.
+  bpw mul1 codebook): TP2, no MTP, decode 46.4 / 55.1 / 49.7 t/s (rewrite / story / explain, engine d44ea8d),
+  prefill 557 t/s (6.8k); Qwen3.6 TP2 + MTP: 53.9 / 64.6 / 58.8. Details HANDOFF.md §2. Qwen3.6 numbers below.
 - **Speed (100 W cap, >= 1024 tokens):** decode short 53.9 / 64.6 / 58.8 t/s (TP2 + MTP, 2026-10-31), 200k 32.4 (no MTP);
   prefill ~550 t/s (7k), 288-293 t/s (151k). Targets not met: decode 80, prefill 1000 / 500.
 - **Quality:** sparse end to end KL 0.00125 (130k) / 0.00165 (261k) vs full attention (q8_0 KV itself ~0.001).
@@ -35,7 +34,7 @@ Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workfl
   (GPUs <= 70 C): power delivery suspected. GPU power cap 100 W permanent (user decision 2026-10-30). TP2 prefill ring hang S10 open.
 - **TOP PRIORITY (user, 2026-10-26): native EXL3** (no conversion; keep MTP + vision; fast mul1):
   `native-exl3-plan.md`.
-- **Plan (user-decided order, 2026-10-30):** 0. (native EXL3, referenced in TOP PRIORITY above; continues after / alongside all 11 steps below) 1. Fast mul1 decode (open-paths #7); 2. Native EXL3 loader (plan steps 1-3); 3. Sage's own MTP head; 4. MTP verify-step anomaly (2-token step cost); 5. Prefill: two-card time breakdown + balance fix; 6. EXL3 GEMM rewrite for energy per FMA; 7. Short-prompt prefill (stop re-streaming cached experts); 8. KVarN-6 fixes (prefill > 64k, decode at 200k); 9. Sparse-attention track (micro-blocks M1-M2 first); 10. Vision.
+- **Plan (user-decided order, 2026-10-30):** 0. (native EXL3, referenced in TOP PRIORITY above; continues after / alongside all 11 steps below) 1. ~~Fast mul1 decode (open-paths #7)~~ DONE 2026-10-31 (engine d44ea8d): Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9). 2. Native EXL3 loader (plan steps 1-3); 3. Sage's own MTP head; 4. MTP verify-step anomaly (2-token step cost); 5. Prefill: two-card time breakdown + balance fix; 6. EXL3 GEMM rewrite for energy per FMA; 7. Short-prompt prefill (stop re-streaming cached experts); 8. KVarN-6 fixes (prefill > 64k, decode at 200k); 9. Sparse-attention track (micro-blocks M1-M2 first); 10. Vision.
 
 ## Where we are (2026-10-19) — SUPERSEDED 2026-10-26 (see above)
 

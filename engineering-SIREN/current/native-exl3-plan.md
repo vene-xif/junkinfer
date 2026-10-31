@@ -211,10 +211,11 @@ llama.cpp projector `PROJECTOR_TYPE_QWEN3VL` (`clip.cpp` ~1000, ~1740, ~4195).
 
 ### Step 6 — fast mul1 (1-2 days; can run in parallel with steps 1-5)
 
+**DONE 2026-10-31 (engine d44ea8d):** exact mul1 byte sum (dropping f16 round trip, using `dotPacked4x8EXT`) + affine fold reach mcg's 293 Gdecode/s. Sage decode 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9). v_sad_u8 is not emitted by ACO from GLSL on gfx8; the gain came from ALU path optimization, not a single instruction. See engineering-log 2026-10-31.
+
 Why it matters: current exllamav3 quants (MiniCPM-V 4.7, Sage-A1.5: 1.5.0) use the `mul1` codebook; the community
 Qwen3.6 quant uses `mcg`. Confirm in the exllamav3 source which codebook is the current default before claiming it
-for all new quants. Our `mul1` decode is ~20 % dearer per weight on gfx803: Sage GPU 21.8 ms/token vs Qwen3.6 18.0 at
-the same bit widths and expert hit rate (engineering log 2026-10-26).
+for all new quants.
 
 The per-weight decode (`shaders/x3_mv.comp`, `mcg()` / `mul1()` ~lines 131-145; the same functions in the GEMM and
 dequant shaders in ggml-vulkan):
@@ -240,12 +241,9 @@ Plan:
    our own Mesa (or patching an ACO pattern) is possible but a bigger commitment (deployment on the box, upgrades).
    Ask the user before going there.
 
-Correction to an earlier claim: **prefill barely benefits.** The prefill GEMM decodes each weight once per tile and
-reuses it across the ubatch's 4096 tokens, so the codebook ALU is amortised; decode (1-4 tokens per weight decode)
-is where mul1's cost shows. MTP verify steps (2 tokens) amortise it over 2.
-
-Expected: closing most of the 20 % (A6). If `v_sad_u8` is reachable, mul1 decodes cheaper than mcg (fewer VALU
-ops), i.e. Sage could beat today's Qwen3.6 numbers.
+Correction to an earlier claim: **prefill gains +2.6 %** (543 -> 557 t/s at 6.8k). The prefill GEMM decodes each weight once per tile and
+reuses it across the ubatch's 4096 tokens, so the codebook ALU cost is amortised but still present; the fold applies
+to every tile. MTP verify steps (2 tokens) amortise decode's per-token decoding; the fold helps there too.
 
 ## 4. Things to watch for (all steps)
 

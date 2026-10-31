@@ -25,7 +25,7 @@ Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EX
 | 4 | ~~Reboot with `iommu=pt` + `amdgpu.lockup_timeout`~~ DONE 2026-10-20: iommu=pt neutral (245k 29.4-29.7 vs 29.3-30.0, 2k 43-45.5); lockup timeout 60/120 s active (long jobs no longer need splitting - unverified) | done | - | - |
 | 5 | ~~LM head IQ4_NL (from the BF16 head)~~ REJECTED 2026-10-20: decode 2k 44.6 -> 47.3 (+6 %), 245k +4 %, but KL 0.00033 -> 0.0044 (130k) / 0.00036 -> 0.0026 (99k), top-1 0.997 -> 0.976. Q5_K (333 MB) untested: at most +2-3 %. Real path: EXL3 head ~4 bpw (item 29, needs requant) | rejected | - | tools/swap_head.py kept |
 | 6 | ~~Dynamic top-k (JI_TOPK_TAU, engine option)~~ REJECTED 2026-10-20: KL 99k/130k tau 0.02: 0.0016/0.0008, 0.04: 0.0070/0.0022, 0.06: 0.031/0.0062; decode 2k 44.7 -> 44.7/45.1/45.7, 245k unchanged (a layer's experts already run in parallel: dropping one does not shorten the critical path) | rejected | - | - |
-| 7 | `v_sad_u8` from GLSL (GL_EXT_integer_dot_product `dotPacked4x8EXT(x, 0x01010101)`) - does RADV/ACO lower it to sad / cheap ops on gfx803? | OPEN | mul1 decode ~20 % cheaper per weight | ISA dump of a test shader |
+| 7 | `v_sad_u8` from GLSL (GL_EXT_integer_dot_product `dotPacked4x8EXT(x, 0x01010101)`) - RESOLVED: not emitted by ACO as v_sad_u8 on gfx8, but the gain came from dropping the f16 round trip (exact) + dotPacked4x8EXT byte sum (SDWA lowers it) + affine fold. Sage 21.8 -> 18.9 ms/token. | DONE 2026-10-31 (engine d44ea8d) | mul1 decode now at mcg cost (fix 1: exact); affine fold (fix 2, opt-in) reaches it without losing top-1 | — |
 | 8 | ~~srvpf decode 0.0 t/s~~ CLOSED: raw /completion on the docs prompt - the model predicts end-of-text after the document's last line (benign) | done | - | - |
 | 9 | JI_SP_NORM=2 LSE in attn_score instead of attn_topk (2-workgroup latency) | optional | makes NORM=2's -5 % KL nearly free | small shader change |
 
@@ -120,7 +120,7 @@ rewrite has to cut instructions / energy per FMA, not only stalls.
 
 | # | Path | Expected gain |
 |---|---|---|
-| 27 | Re-quantize Qwen3.6 with mul1 (cheaper decode ALU than mcg on gfx803, see 7) | ALU-bound matvecs faster |
+| 27 | Re-quantize Qwen3.6 with mul1 — not needed: mul1 now decodes at mcg cost (2026-10-31 engine d44ea8d); performance gain would only come from refactoring to native loading (plan step 3) | not applicable | — | — |
 | 28 | Hot / cold expert bit tiering (VRAM-hot ~3.35 bpw, cold ~2.45), down_proj > gate/up bits, GDN 3.5 bpw, attention K/V 5.5-6 bpw | report 5: big PCIe and cache gains inside the KL bar (unverified) |
 | 29 | LM head EXL3 4 bpw (alternative to 5) | ~-0.7 ms |
 | 30 | REAM folding of the ~12.5 % most dormant experts (256 -> 224) | cache hit rate |

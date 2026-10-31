@@ -1830,3 +1830,27 @@ every submit; use huge pages for imports and keep them few.
 
 **User decision (2026-10-30).** The GPU power cap stays at 100 W permanently, even after the PSU swap. All targets
 (decode >= 80 t/s, prefill >= 1000 / >= 500 at 262k) are to be met at 100 W.
+
+## 2026-10-31 — EXL3 mul1 decode at mcg cost (engine d44ea8d)
+
+**Problem.** Sage-A1.5 (mul1 codebook, 4.0 bpw) decodes ~20 % slower than Qwen3.6 (mcg codebook, same bit width): GPU time per token 21.8 vs 18.0 ms on gfx803, despite identical expert hit rates (93.6 vs 93.9 %) and tensor shapes. Profiling showed the mul1 codebook ALU path as the bottleneck.
+
+**Measurements** (lab/cbdecode: micro-benchmark of codebook decode on gfx803, 65536 16-bit inputs, throughput Gdecode/s on RX 580):
+
+| variant | throughput |
+|---|---|
+| mcg | 293 |
+| mul1, before | 188 |
+| mul1 + byte sum as dotPacked4x8EXT | 247 |
+| mul1 + affine fold | 293 |
+
+**Fix 1** (exact, `x3_mv.comp` + `pf_mm` + `mul_mm_gcn_exl3` + `dequant_exl3`, engine d44ea8d): mul1 byte sum drops the f16 round trip (the value is already an f16, round trip is bit-identical) and uses `dotPacked4x8EXT(x, 0x01010101)` for the byte sum (RADV/ACO lowers it to SDWA byte adds). Only the scaling path differs from mcg now.
+
+**Fix 2** (x3_mv decode only, opt-in knob): affine fold of the mul1 decode. The multiply and byte sum become one pre-folded weight scale and constant offset per column (ALU/register gain). Variants: `JI_X3_FOLD` 0 (exact), 1 (centred byte sum), 2 (raw fold, default). KL vs exact on Sage L_code 32k (single card, dense): fold 0: 0 (bit-exact); fold 1: 0.00012 (p99 0.0021, top-1 0.999); fold 2: 0.00014 (p99 0.0028, top-1 0.998).
+
+**Evidence** (TP2, 100 W, spectest 1024 tokens rewrite / story / explain, engine d44ea8d, JI_X3_FOLD=2 default):
+- Sage: 39.6 / 46.0 / 41.9 -> **46.4 / 55.1 / 49.7 t/s** (+17 % average)
+- Qwen3.6: 53.9 / 64.6 / 58.8 t/s (unchanged)
+- Prefill 6.8k: 543 -> 557 t/s (+2.6 %)
+- GPU time per token: 22.1 -> 18.9 ms
+- smoke_api and conv_switch_test ALL PASS

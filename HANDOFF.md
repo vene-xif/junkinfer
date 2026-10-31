@@ -166,7 +166,7 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 0. **TOP PRIORITY (user, 2026-10-26): native EXL3 — load exllamav3 checkpoints without conversion, keep their MTP
    layer and vision tower, make the current `mul1` codebook fast.** Full step-by-step plan, pitfalls, checks and
    remaining headroom: [`engineering-SIREN/current/native-exl3-plan.md`](engineering-SIREN/current/native-exl3-plan.md).
-   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. Sage 39.6 / 46.0 / 41.9 t/s. 2. Fast mul1 decode (open-paths #7). 3. Native EXL3 loader (plan steps 1-3). 4. Sage's own MTP head. 5. MTP verify-step anomaly. 6. Prefill: two-card time breakdown + balance. 7. EXL3 GEMM energy rewrite. 8. Short-prompt prefill (no re-stream). 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
+   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. 2. **Fast mul1 decode [DONE 2026-10-31, engine d44ea8d]**: Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9), prefill 557 t/s (was 541). 3. Native EXL3 loader (plan steps 1-3). 4. Sage's own MTP head. 5. MTP verify-step anomaly. 6. Prefill: two-card time breakdown + balance. 7. EXL3 GEMM energy rewrite. 8. Short-prompt prefill (no re-stream). 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
    It supersedes prior items below. Current items continue (or in parallel where independent).
 
 1. **KVarN-6: prefill from scratch beyond ~64k is wrong** (130k: KL 0.27 single card, 0.118 TP2; 32k 0.00085 and

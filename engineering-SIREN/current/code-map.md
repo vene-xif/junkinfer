@@ -209,6 +209,9 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 | `JI_PF_UDMA` | 0 | **do not use** (hard-locked the box 2026-10-22) |
 | `JI_ATTN_TEST`, `JI_ATTN_KVR2`, `JI_TP_TEST` | 0 | kernel self-tests (diag) |
 | `JI_KV_DUMP*`, `JI_ROUTE_DUMP` | unset | debug dumps |
+| `JI_X3_FOLD` | 2 | mul1 decode variant: 0 exact (bit-identical), 1 centred byte sum, 2 raw affine fold (x3_mv decode only) |
+| `JI_HOST_THP` | 1 | imported host buffers on 2 MiB huge pages with pre-faulting (0 = old 4 KiB pages, ~8-25 % slower) |
+| `JI_PF_KEEPCB` | 0 | keep prefill command buffers between prefills (1 = no pool trim, slower for varied ubatch sizes) |
 
 ## Project Scripts
 
