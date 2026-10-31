@@ -5,7 +5,7 @@
 > `engineering-log.md`, live priorities to `open-paths.md`.
 > Sources: report A = "Low-bit decode / GEMM kernels on GCN4" (research prompt 1, in Polish);
 > report B = "Long-context KV compression, sparse attention, Qwen4 readiness" (prompt 3);
-> report C (two-card TP over weak PCIe, prompt 2) pending.
+> report C = "Two-GPU tensor parallelism over weak PCIe without P2P" (prompt 2; written for a dense 27B, out of scope).
 
 ## Ranked actions
 
@@ -55,6 +55,30 @@
 - Qwen gated attention (sigmoid output gate) collapses attention sinks (first-token mass ~47 % -> ~5 % per report B):
   sink-based KV / sparse heuristics are unreliable on Qwen3.5+; keep the exact local window and avoid sink-only
   shortcuts.
+
+## Two-card exchange and P2P (report C + AUX-1 topology, 2026-10-31)
+
+AUX-1 facts: card A 06:00.0 on a CPU root port (PCIe 3.0 x16); card B 05:00.0 behind the chipset (bridge shared
+with the Ethernet NIC), PCIe 2.0 x4. Both cards have resizable BAR at 8 GB (full VRAM mappable); kernel has
+CONFIG_PCI_P2PDMA=y; CPU Ryzen 5 2600 (Zen 1).
+
+- **P2P is probably possible** (export a VRAM buffer as dma-buf from one device, import on the other; amdgpu uses a
+  real peer mapping when pci_p2pdma_distance allows it, else silently migrates the buffer to GTT). **It buys little
+  here:** every byte between the cards still crosses card B's PCIe 2.0 x4 link, host-staged or P2P. Prefill exchange
+  (~1.4 s per 4096-token batch, 24-bit wire) is bandwidth on that link - unchanged by P2P. Decode syncs are latency:
+  P2P would let the reader poll its own VRAM instead of host memory over PCIe, maybe a few us per sync, ~0.1-0.3 ms
+  per token. Not worth the driver risk (hang-prone paths, see aux1-tp2-kill-freeze).
+- **The real fix is lanes:** card B on CPU lanes (x8/x8 bifurcation on a board that supports it, PCIe 3.0) gives ~5x
+  the bandwidth: prefill exchange ~1.4 s -> ~0.3 s per batch (est. +15-20 % two-card prefill) and lower decode sync
+  latency. A 6650 XT pair would still be limited by the same x4 slot.
+- Report C's playbook (single pre-recorded command buffer per step, exchange through pinned host memory with
+  coherent / uncached mailbox + in-shader spin-polling, asymmetric split, compact wire formats) is essentially JDE's
+  existing design (replayed command buffers, host exchange area, JI_TP_FRAC 0.7, 24-bit / q8 prefill wire).
+- Small checks worth doing: (a) measure decode TP2 sync overhead per token (JI_TP_PROF) - report C's target is < 5 ms
+  total; if ours is ~1-2 ms there is nothing to win; (b) q8 wire for MTP verify steps (K = 2-4 tokens) if those
+  exchanges show up in the profile; (c) full-duplex overlap of the two directions on card B's link; (d) PCIe Max
+  Payload Size 256 B on card B's path (lspci -vv DevCtl MaxPayload); (e) host-side waits: /dev/cpu_dma_latency = 0
+  while serving if any CPU thread is on the per-layer path.
 
 ## Qwen4 readiness (report B; post-cutoff, unverified - check against the real release)
 
