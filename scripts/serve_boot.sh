@@ -31,5 +31,9 @@ fi
 # attention at 130k from scratch 0.00136 (q8_0 0.00123), decode at 200k 34.5 vs 33.1 t/s (Qwen3.6, TP2), Sage 8k / 32k
 # decode 49.7 / 43.4 vs 47.0 / 42.7 t/s, prefill equal; conv_switch_test passes
 export JI_KVARN=${JI_KVARN:-1}
+# 2026-10-31: routing traces of every decoded token for the expert-prefetch work (tools/routes/read_trace.py); on the
+# HDD, ~165 KB per token until JI_ROUTE_LOG_MAX_GB (150), then ~1 KB; JI_ROUTE_LOG= (empty) turns it off; no speed cost
+export JI_ROUTE_LOG=${JI_ROUTE_LOG-/home/vene/traces}
+[ -n "$JI_ROUTE_LOG" ] && mkdir -p "$JI_ROUTE_LOG"
 echo "serve_boot: KV cache $([ "$JI_KVARN" != 0 ] && echo KVarN-6 || echo q8_0)"
 exec scripts/serve.sh "$@"
