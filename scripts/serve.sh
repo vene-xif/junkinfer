@@ -117,7 +117,10 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
   if [ "${JI_MTP:-0}" != 0 ]; then
     REF=$(cd "$(dirname "$0")/.." && pwd)/ref/mtp
     export JI_MTP_VOCAB_FILE=${JI_MTP_VOCAB_FILE:-$REF/hyperqwen_draft_vocab_40960.json} JI_MTP_HEAD_TYPE=${JI_MTP_HEAD_TYPE:-iq4_nl}
-    MTP_ARGS=(-md "${JI_MTP_MODEL:-$(dirname "$MODEL")/mtp-IQ4_NL.v2.gguf}" --spec-type draft-mtp -ngld 0 -devd none
+    # an exllamav3 checkpoint directory brings its own MTP layer: "<dir>::mtp" = its MTP view (native loader; the EXL3
+    # MTP block re-quantized to IQ4_NL / Q5_K / Q6_K / Q8_0 at load); a GGUF model uses the Qwen3.6 sidecar
+    if [ -d "$MODEL" ]; then DEF_MTP="$MODEL::mtp"; else DEF_MTP="$(dirname "$MODEL")/mtp-IQ4_NL.v2.gguf"; fi
+    MTP_ARGS=(-md "${JI_MTP_MODEL:-$DEF_MTP}" --spec-type draft-mtp -ngld 0 -devd none
               --no-spec-draft-backend-sampling --spec-draft-n-max 1 --spec-draft-p-min "${JI_MTP_PMIN:-0.5}")
   fi
   exec "$ENGINE/llama-server" -m "$MODEL" \
