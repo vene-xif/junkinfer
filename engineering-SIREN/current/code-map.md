@@ -204,6 +204,7 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 | `JI_KVARN_RING` | 12544 | KVarN exact window ring, cells per head |
 | `JI_KVR_TAIL` | 1 | put the rings in the KV tensors' unused tail (0 = own buffers, costs 130 MiB VRAM) |
 | `JI_KVR_ITERS` | 16 | KVarN seal: balancing iterations per tile |
+| `JI_KVR_META_DEFER` | 1 | defer sparse page metadata rebuild to the first sparse decode step after prefill (0 = old per-ubatch rebuild; fixed from-scratch defect on TP2 2026-10-31) |
 | `JI_KVR_PFT` | 0 | test: force the separate prefill copy buffer |
 | `JI_KVSIM` | 0 | diag: simulate KVarN at N bits inside the q8_0 cache |
 | `JI_PROFILE` | 0 | every N tokens: per-token phases, expert hits / misses per step size |

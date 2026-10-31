@@ -2014,3 +2014,46 @@ Step 7 partly done (narrow tiles).
 **Incident 06:37 today:** A job did `systemctl stop junkinfer; sleep 5` while the service was still starting up. The stop had not taken effect, llama-junk-ref started, and two model processes OOMed the box, triggering a reboot. The service needs a synchronisation point: it now waits for all daemons to exit (see `stopsrv.sh`).
 
 **Job scripts policy:** on AUX-1, use `sudo -n` (passwordless works); never write passwords into files.
+
+## 2026-10-31 — KVarN-6 from-scratch defect found and fixed (engine cd30f03)
+
+**Issue:** 130k prefill from scratch with KVarN-6 scored KL 0.118 / top1 0.906 (vs q8_0 0.00123 / 0.9883). 32k and all restored-state decodes were correct. The defect lay in the JDE prefill's KVarN path.
+
+**Root cause:** After each JDE prefill ubatch the KVarN path rebuilt the sparse page metadata from the window ring before sealing (in `jde_kvr_meta_rebuild`). On TP2 the primary's kv-head-1 rows are pulled back from the helper **only inside the seal** (in `jde_kvr_head1_back`), so the sparse metadata rebuild happened on stale kv-head-1 rows that had not been copied back yet.
+
+**Fix:** New environment variable `JI_KVR_META_DEFER` (default 1; set to 0 for the old per-ubatch rebuild). With `JI_KVR_META_DEFER=1`, pages stay dirty during prefill and the first sparse decode step rebuilds their metadata from the sealed records + window ring. This matches the semantics after a state restore: all pages are initially dirty and metadata is rebuilt at the first sparse decode step after restore (verified: restored states were correct before and after the fix).
+
+**Measurements** (TP2, sparse defaults, from scratch, engine cd30f03):
+- 98k KVarN: KL 0.0304 → 0.00141 (top1 0.9746 → 0.9951)
+- 130k KVarN: KL 0.118 → 0.00136 (top1 0.906 → 0.990)
+- 130k q8_0: KL 0.00123 (unchanged, production reference)
+- Speed: KVarN opt-in, production q8_0 unchanged; one-time cost is the first sparse decode step after a long prefill rebuilding all dirty pages' metadata (not yet timed).
+
+**Remaining KVarN items (open in HANDOFF section 9):** decode at 200k slower than q8 (25.1 / 27.4 vs 32.4 t/s); K6V5 / K6V4 asymmetric variants; end-to-end gate and making KVarN the default if it wins.
+
+## 2026-10-31 — Qwen3.8 27B viability (dense path estimates and measured sparse/quant baselines)
+
+**Model & hardware:** Qwen3.8 27B (standalone dense, not MoE). Two RX 580 8 GB cards, TP2 layer split, 100 W per GPU cap (hard limit 2026-10-30).
+
+**EXL3 SC 3.0 bpw baseline** (turboderp community, converted to GGUF with exl3_to_gguf.py dense support, engine qwen35.cpp transforms; engine commits b3e4b9b / docs 084588f):
+- Prefill: 64 t/s (1k prompt, ubatch 512)
+- Decode on the graph path: 0.77 t/s (no fast 3-bit EXL3 mat-vec on the ggml graph path; this is the fallback when JDE prefill buffer too small for 256 tokens)
+
+**GSQ-RCO IQ3_XXS-mtp** (10.4 GB, MTP sidecar on the helper GPU TP2 config):
+- Prefill: 45 t/s (1k prompt, ubatch 512), 50 t/s (4k prompt, ubatch 1024)
+- Decode on the graph path: 10.4–10.6 t/s
+- MTP: 2-3 drafts per token on the graph path; draft acceptance 0.49–0.60 per draft at temp 0.7; speculative decode +20–40 % wall time (decode 7–10 t/s with MTP vs 10.4–10.6 t/s baseline; slower than beneficial on the ggml path with poor PCIe/expert throughput).
+
+**Estimated JDE dense path** (not yet built): assume similar expert-cache hit patterns and MoE-to-dense reduction as Qwen3.6 (60 layers → 50 GEMMs at 100 W):
+- Decode: ~18–21 t/s baseline, ~25–32 t/s with effective MTP
+- Prefill: ~100–120 t/s (power-limited at 100 W)
+- Hard ceiling (fp32 FMA peak without matrix units on gfx803): ~215 t/s prefill
+
+**Context budget** (KV for 27B at 100 W, q8_0 vs KVarN-6):
+- q8_0: ~100k tokens
+- KVarN-6: ~130k tokens (23.5 % saved bandwidth + VRAM spill headroom)
+
+**Hardware note:** the SSD mSATA adapter (ata11) failed under heavy I/O on 2026-10-31 (SATA link resets, read errors, 1.5 Gbps fallback; reboot restored 6 Gbps but errors recur under sustained reads). User informed; hardware fix pending. Models moved to HDD overflow `~/models/ssd-overflow/`: Sage-A1.5-exl3-4.00bpw.gguf (redundant with native checkpoint), head-*.tmp.gguf, mtp-BF16.gguf, minicpm5-vllm; the 27B EXL3 GGUF kept on both disks for redundancy.
+
+**Reference for comparison:** user data on RTX 3090 (hyperqwen vLLM fork): Qwen3.8 27B ~100 t/s decode, ~1500 t/s prefill. Decode ratio ~3.4× matches throughput expectations (3090 ~1300 Gdecode/s TP2 expert cache hits vs RX 580 ~290 Gdecode/s, similar expert miss rate / PCIe); prefill gap is tensor cores (3090 TFLOP / 100 W vs RX 580 FMA-only at the same power).
+

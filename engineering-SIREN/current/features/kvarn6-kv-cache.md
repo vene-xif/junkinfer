@@ -108,15 +108,11 @@ teardown and on fatal signals. See `features/README.md` (operational hazards).
 
 KL gate (`kl.sh L_code 0 JI_TP=2 JI_KVARN=1`, vs our full-attention q8_0 reference; q8 baseline 0.00020): **pending**.
 
-## From-scratch quality (2026-10-31: defect confirmed, open)
+## From-scratch quality (2026-10-31: defect fixed)
 
 **Earlier concern:** 130k from-scratch prefill scored KL 0.27 in the harness. Root cause: the KL harness (`~/jt/kl_v2.sh`) never set `JI_JPF=1`, so all prefills used the ggml graph-path engine, which does not build KVarN records or the window ring. A saved state from graph-path prefill had buffer corruption (rel. error 1.000 everywhere), while the tail through decode matched q8_0 to digit; the high KL was thus meaningless.
 
-**Status (job88, 2026-10-31):** with the harness fixed (`JI_JPF=1`) the defect is real: TP2, default sparse, 130k from
-scratch through the JDE prefill: q8_0 KL 0.00123, KVarN **0.118** (top1 0.906). 32k from scratch is fine (q8 0.00071,
-KVarN 0.00092, single card, sparse off); restored states decode fine at every length. The graph-path runs (KL ~2,
-empty saved states) were a separate harness artefact, not this defect. Open: bisect by depth (64k / 98k) with the
-JDE prefill, then compare a saved from-scratch state per layer / cell (`kvrblk.py`).
+**Resolution (job88, engine cd30f03, 2026-10-31):** the defect was real: TP2, default sparse, 130k from scratch through the JDE prefill: q8_0 KL 0.00123, KVarN **0.118** (top1 0.906). Root cause: after each JDE prefill ubatch the KVarN path rebuilt sparse page metadata from the window ring, but on TP2 kv-head-1 rows are pulled back from the helper only inside the seal, so the rebuild happened on stale rows. Fix: new `JI_KVR_META_DEFER` (default 1) defers metadata rebuild to the first sparse decode step (matching semantics after state restore, where all pages are initially dirty). **Results:** 98k KVarN 0.0304 → 0.00141 (top1 0.9746 → 0.9951), 130k 0.118 → 0.00136 (0.906 → 0.990). 32k and all restored-state decodes were correct before and after the fix.
 
 ## Porting notes
 
