@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert an exllamav3 EXL3 Qwen3.5/3.6-MoE checkpoint (qwen35moe) to a JunkInfer GGUF.
+"""Convert an exllamav3 EXL3 Qwen3.5/3.6-MoE (qwen35moe) or dense Qwen3.5/3.8 (qwen35) checkpoint to a JunkInfer GGUF.
 
 EXL3 linears become GGML_TYPE_EXL3_<bits> tensors (one ggml block = one 16x16 trellis tile, tiles re-ordered from
 exllamav3's [K/16][N/16] to [N/16][K/16] so a group of 16 outputs is contiguous) plus F32 `<name>.suh` [K] and
@@ -7,7 +7,7 @@ exllamav3's [K/16][N/16] to [N/16][K/16] so a group of 16 outputs is contiguous)
 Other tensors get llama.cpp's qwen35 conversion transforms (A_log -> -exp, RMSNorm +1, conv1d squeeze) and the
 GDN value heads are reordered grouped -> tiled like convert_hf_to_gguf.py does; on EXL3 tensors whole 128-wide
 heads are moved (tile groups + scale vectors), which commutes with the blockwise Hadamard.
-Metadata (hparams, tokenizer, template) is copied from an existing qwen35moe GGUF of the same architecture; the MTP
+Metadata (hparams, tokenizer, template) is copied from an existing qwen35moe / qwen35 GGUF of the same architecture; the MTP
 layer is dropped. Fine-tunes with their own tokenizer.json (same BPE, e.g. MiniCPM-V 4.7: Qwen3.6's vocabulary plus
 special tokens in its padding slots) get the token list / types re-derived from it, truncated to the embedding rows,
 and their chat template. Codebook: mcg or mul1 (per tensor; must be uniform) -> junkinfer.exl3.codebook 0 / 1.
@@ -71,7 +71,7 @@ def main():
     cfg = json.load(open(os.path.join(src, "config.json")))
     tc = cfg.get("text_config", cfg)
     n_layer = tc["num_hidden_layers"]
-    n_expert = tc["num_experts"]
+    n_expert = tc.get("num_experts")          # None: dense (qwen35, e.g. Qwen3.8 27B)
     nk, nv = tc["linear_num_key_heads"], tc["linear_num_value_heads"]
     hk, hv = tc["linear_key_head_dim"], tc["linear_value_head_dim"]
     assert hv == HB, "head reorder of EXL3 tensors needs 128-wide value heads"
@@ -85,10 +85,10 @@ def main():
 
     rd = gguf.GGUFReader(meta_path)
     arch = rd.fields["general.architecture"].contents()
-    assert arch == "qwen35moe", arch
+    assert arch == ("qwen35moe" if n_expert else "qwen35"), arch
     w = gguf.GGUFWriter(out_path, arch)
     skip = {"GGUF.version", "GGUF.tensor_count", "GGUF.kv_count", "general.architecture",
-            f"{arch}.nextn_predict_layers", "general.file_type"}
+            f"{arch}.nextn_predict_layers", f"{arch}.block_count", "general.file_type"}
     n_emb = st.hdr[P_EMB][2]["shape"][0]
     n_vocab = max(n_emb, st.hdr["lm_head.trellis"][2]["shape"][1] * 16)   # lm_head trellis [K/16, N/16, 16 bits]
     assert len(rd.fields["tokenizer.ggml.tokens"].data) >= n_vocab, "meta GGUF has fewer tokens than the head"
@@ -259,6 +259,11 @@ def main():
             add_f32(b + "ssm_conv1d.weight", conv, [2 * nk * hk + nv * hv, tc["linear_conv_kernel_dim"]])
             add_f32(b + "ssm_norm.weight", lambda A=A: st.f32(A + "norm.weight"), [hv])
         M = L + "mlp."
+        if not n_expert:   # dense FFN
+            add_exl3(b + "ffn_gate", M + "gate_proj")
+            add_exl3(b + "ffn_up", M + "up_proj")
+            add_exl3(b + "ffn_down", M + "down_proj")
+            continue
         add_f32(b + "ffn_gate_inp.weight", lambda M=M: st.f32(M + "gate.weight"), [n_expert, tc["hidden_size"]])
         add_f32(b + "ffn_gate_inp_shexp.weight", lambda M=M: st.f32(M + "shared_expert_gate.weight").reshape(-1), [tc["hidden_size"]])
         add_exl3(b + "ffn_gate_shexp", M + "shared_expert.gate_proj")
