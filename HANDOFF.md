@@ -165,6 +165,8 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 
 ## 9. Open work, in priority order
 
+**Research-derived actions (2026-10-31):** `engineering-SIREN/current/research-actions.md` - ranked, checked against our measurements (decode-kernel bench first; contiguous activation reads in x3_mv; MTP speculative sampling at temperature > 0; integer accumulate; v_sad_u8 via a side Mesa build; register-decoded prefill GEMM).
+
 0. **TOP PRIORITY (user, 2026-10-26): native EXL3 — load exllamav3 checkpoints without conversion, keep their MTP
    layer and vision tower, make the current `mul1` codebook fast.** Full step-by-step plan, pitfalls, checks and
    remaining headroom: [`engineering-SIREN/current/native-exl3-plan.md`](engineering-SIREN/current/native-exl3-plan.md).
