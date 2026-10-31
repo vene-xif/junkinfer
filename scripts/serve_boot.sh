@@ -27,4 +27,9 @@ else
   [ "$ncards" -lt 2 ] && export JI_GPU=${JI_GPU:-0}
   echo "serve_boot: $ncards GPU(s) - single-card mode (JI_GPU=${JI_GPU:-1})"
 fi
+# 2026-10-31: KVarN-6 KV cache on by default (JI_KVARN=0 in /etc/junkinfer.env turns it off): KV 23.5 % smaller, KL vs full
+# attention at 130k from scratch 0.00136 (q8_0 0.00123), decode at 200k 34.5 vs 33.1 t/s (Qwen3.6, TP2), Sage 8k / 32k
+# decode 49.7 / 43.4 vs 47.0 / 42.7 t/s, prefill equal; conv_switch_test passes
+export JI_KVARN=${JI_KVARN:-1}
+echo "serve_boot: KV cache $([ "$JI_KVARN" != 0 ] && echo KVarN-6 || echo q8_0)"
 exec scripts/serve.sh "$@"
