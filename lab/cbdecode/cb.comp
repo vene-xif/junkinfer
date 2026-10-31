@@ -1,0 +1,110 @@
+#version 450
+// EXL3 codebook decode variants (mcg / mul1) on gfx803: exhaustive check (MODE 0) and throughput (MODE 1)
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_integer_dot_product : require
+layout(local_size_x = 256) in;
+layout(constant_id = 0) const uint VAR = 1u;
+layout(constant_id = 1) const uint MODE = 0u;
+layout(std430, binding = 0) buffer O { float o[]; };
+layout(push_constant) uniform PC { uint iters; } pc;
+
+float mcg(uint v) {
+    uint x = v * 0xCBAC1FEDu;
+    x = (x & 0x8fff8fffu) ^ 0x3b603b60u;
+    const f16vec2 hh = unpackFloat2x16(x);
+    return float(hh.x + hh.y);
+}
+float mul1_ref(uint v) {
+    const uint x = v * 0x83DCD12Du;
+    const uint t = (x & 0x00FF00FFu) + ((x >> 8) & 0x00FF00FFu);
+    const float h = float((t & 0xFFFFu) + (t >> 16) + 1024u);
+    return float(float16_t(fma(h, 0.00676727294921875, -10.3828125)));
+}
+float mul1_dot(uint v) {
+    const uint x = v * 0x83DCD12Du;
+    const float h = float(dotPacked4x8EXT(x, 0x01010101u) + 1024u);
+    return float(float16_t(fma(h, 0.00676727294921875, -10.3828125)));
+}
+float mul1_dotacc(uint v) {
+    const uint x = v * 0x83DCD12Du;
+    const float h = float(dotPacked4x8AccSatEXT(x, 0x01010101u, 1024u));
+    return float(float16_t(fma(h, 0.00676727294921875, -10.3828125)));
+}
+float mul1_ubyte(uint v) {
+    const uint x = v * 0x83DCD12Du;
+    const float s = float(x & 0xFFu) + float((x >> 8) & 0xFFu) + float((x >> 16) & 0xFFu) + float(x >> 24);
+    return float(float16_t(fma(s, 0.00676727294921875, 1024.0 * 0.00676727294921875 - 10.3828125)));
+}
+float mul1_fold(uint v) {
+    const uint x = v * 0x83DCD12Du;
+    const uint t = (x & 0x00FF00FFu) + ((x >> 8) & 0x00FF00FFu);
+    const float s = float((t & 0xFFFFu) + (t >> 16));
+    return float(float16_t(fma(s, 0.00676727294921875, 1024.0 * 0.00676727294921875 - 10.3828125)));
+}
+float mul1_nof16(uint v) {
+    const uint x = v * 0x83DCD12Du;
+    const float h = float(dotPacked4x8EXT(x, 0x01010101u));
+    return fma(h, 0.00676727294921875, 1024.0 * 0.00676727294921875 - 10.3828125);
+}
+float mul1_mad(uint v) {   // dot + plain multiply-add (no fma request, no f16 round trip)
+    const uint x = v * 0x83DCD12Du;
+    return float(dotPacked4x8EXT(x, 0x01010101u)) * 0.00676727294921875 + (1024.0 * 0.00676727294921875 - 10.3828125);
+}
+float mul1_raw(uint v) {   // the byte sum only: the affine (A s + B) is applied once per dot product, not per weight
+    const uint x = v * 0x83DCD12Du;
+    return float(dotPacked4x8EXT(x, 0x01010101u));
+}
+// v < 2^16: v * C mod 2^32 = v * (C & 0xFFFFFF) + ((v * (C >> 24)) << 24) - two 24-bit multiplies (full rate on GCN,
+// v_mul_u32_u24) instead of one quarter-rate v_mul_lo_u32
+uint mul_c(uint v, uint C) { return (v & 0xFFFFu) * (C & 0xFFFFFFu) + (((v & 0xFFFFu) * (C >> 24)) << 24); }
+float mcg_u24(uint v) {
+    uint x = mul_c(v, 0xCBAC1FEDu);
+    x = (x & 0x8fff8fffu) ^ 0x3b603b60u;
+    const f16vec2 hh = unpackFloat2x16(x);
+    return float(hh.x + hh.y);
+}
+float mul1_raw_u24(uint v) { return float(dotPacked4x8EXT(mul_c(v, 0x83DCD12Du), 0x01010101u)); }
+float mul1_mad_u24(uint v) { return float(dotPacked4x8EXT(mul_c(v, 0x83DCD12Du), 0x01010101u)) * 0.00676727294921875 + (1024.0 * 0.00676727294921875 - 10.3828125); }
+float mul1_int(uint v) {   // production form: integer byte sum, +1024 folded, plain mad, no f16 round trip (all exact)
+    const uint x = v * 0x83DCD12Du;
+    const uint t = (x & 0x00FF00FFu) + ((x >> 8) & 0x00FF00FFu);
+    return float((t & 0xFFFFu) + (t >> 16)) * 0.00676727294921875 - 3.453125;
+}
+float mul1_ctr(uint v) {   // centred byte sum (s - 510): the fold's per-column offset becomes ~0 (no cancellation)
+    return float(int(dotPacked4x8EXT(v * 0x83DCD12Du, 0x01010101u)) - 510);
+}
+float mul1_ctrf(uint v) {   // same, the -510 in float
+    return float(dotPacked4x8EXT(v * 0x83DCD12Du, 0x01010101u)) - 510.0;
+}
+float dec(uint v) {
+    if (VAR == 0u) return mcg(v);
+    if (VAR == 1u) return mul1_ref(v);
+    if (VAR == 2u) return mul1_dot(v);
+    if (VAR == 3u) return mul1_dotacc(v);
+    if (VAR == 4u) return mul1_ubyte(v);
+    if (VAR == 5u) return mul1_fold(v);
+    if (VAR == 6u) return mul1_nof16(v);
+    if (VAR == 7u) return mul1_mad(v);
+    if (VAR == 8u) return mul1_raw(v);
+    if (VAR == 9u) return mcg_u24(v);
+    if (VAR == 10u) return mul1_raw_u24(v);
+    if (VAR == 11u) return mul1_mad_u24(v);
+    if (VAR == 12u) return mul1_int(v);
+    if (VAR == 13u) return mul1_ctr(v);
+    return mul1_ctrf(v);
+}
+void main() {
+    const uint gid = gl_GlobalInvocationID.x;
+    if (MODE == 0u) { if (gid < 65536u) o[gid] = dec(gid); return; }
+    // throughput: 8 independent chains per thread, 16-bit inputs as in x3_mv (window >> shift & 0xFFFF)
+    uint s = gid * 2654435761u;
+    float a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0;
+    for (uint i = 0; i < pc.iters; ++i) {
+        s = s * 1664525u + 1013904223u;
+        a0 = fma(dec(s >> 16), 1.0001, a0);           a1 = fma(dec((s >> 12) & 0xFFFFu), 1.0001, a1);
+        a2 = fma(dec((s >> 8) & 0xFFFFu), 1.0001, a2); a3 = fma(dec((s >> 4) & 0xFFFFu), 1.0001, a3);
+        a4 = fma(dec(s & 0xFFFFu), 1.0001, a4);        a5 = fma(dec((s >> 2) & 0xFFFFu), 1.0001, a5);
+        a6 = fma(dec((s >> 6) & 0xFFFFu), 1.0001, a6); a7 = fma(dec((s >> 10) & 0xFFFFu), 1.0001, a7);
+    }
+    o[gid] = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7;
+}
