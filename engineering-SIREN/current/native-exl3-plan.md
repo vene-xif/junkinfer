@@ -1,7 +1,14 @@
 # Native EXL3: load checkpoints directly, keep MTP and vision, fast mul1 — implementation plan
 
-Status: **ACTIVE — TOP PRIORITY (user, 2026-10-26).** Nothing below is implemented yet. Written for the next engineer
-or LLM agent; read `../../HANDOFF.md` first (access, rules, workflow, measurement).
+Status (2026-10-31): **Steps 1-4 and 6 DONE** (engine commits 479f8ab, f89ed0e). Step 5 (vision) open. See the engineering-log entry (2026-10-31) for A/B/C status details.
+
+Key findings:
+- A1 check: 1475 tensors byte-identical vs converter except ssm_a (2 ulp, numpy exp correctly rounded in native with float64).
+- KL on ssm_a: 1-2 ulp in one EXL3 tensor gives KL ~0.00021 on 32k rows (GDN decay is sensitive); GGUF patched with native ssm_a matches native.
+- MTP design choice: re-quantize at load to GGUF types (JDE's draft path does not consume EXL3 directly).
+- p-min sweep on Sage with own MTP head: 0.8 best (lossless); acceptance 87 / 95 / 91 %, decode +22 / +41 / +36 % vs no MTP.
+
+Status: **ACTIVE — TOP PRIORITY (user, 2026-10-26).** Steps 1-4 below are done; read the engineering-log entry and `../../HANDOFF.md` first (access, rules, workflow, measurement).
 
 ## 0. Goal and acceptance criteria
 

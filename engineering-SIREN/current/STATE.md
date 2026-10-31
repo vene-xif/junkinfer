@@ -20,10 +20,10 @@ Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workfl
 - **Production:** boot service `junkinfer.service` on AUX-1 (`scripts/serve_boot.sh`): LAN `0.0.0.0:8080`, two cards
   -> TP2 decode + two-card JDE prefill + MTP (one card -> single-card JDE), q8_0 KV, 262k context, sparse attention,
   Qwen-Sharp chat template, thinking on, auto-restart. `ji-thermal-guard.service` logs GPU temperatures. Verified
-  across two reboots; `smoke_api.py` ALL PASS (2026-10-26). Engine 4f5d347ee, project 3f44c65+.
-- **Served model: Sage-A1.5** (since 2026-10-26, user; Qwen3.6 fine-tune, same architecture / tokenizer, EXL3 4.0
-  bpw mul1 codebook): TP2, no MTP, decode 46.4 / 55.1 / 49.7 t/s (rewrite / story / explain, engine d44ea8d),
-  prefill 557 t/s (6.8k); Qwen3.6 TP2 + MTP: 53.9 / 64.6 / 58.8. Details HANDOFF.md §2. Qwen3.6 numbers below.
+  across two reboots; `smoke_api.py` ALL PASS (2026-10-31). Engine 479f8ab + f89ed0e, project +edits.
+- **Served model: Sage-A1.5** (native EXL3 checkpoint directory, no conversion, own MTP head): TP2, MTP p-min 0.8,
+  decode 47.4 / 62.8 / 55.3 t/s (rewrite / story / explain), prefill 537 t/s (6.8k); Qwen3.6 TP2 + MTP sidecar:
+  53.9 / 64.6 / 58.8. Sage TP2 no MTP: 46.4 / 55.1 / 49.7 (earlier in this date, mul1 decode optimizations). Details HANDOFF.md §2.
 - **Speed (100 W cap, >= 1024 tokens):** decode short 53.9 / 64.6 / 58.8 t/s (TP2 + MTP, 2026-10-31), 200k 32.4 (no MTP);
   prefill ~550 t/s (7k), 288-293 t/s (151k). Targets not met: decode 80, prefill 1000 / 500.
 - **Quality:** sparse end to end KL 0.00125 (130k) / 0.00165 (261k) vs full attention (q8_0 KV itself ~0.001).

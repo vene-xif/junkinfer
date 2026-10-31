@@ -14,6 +14,9 @@
 | `src/llama-context.cpp:3870,3922` | `jde_state_sync()` — sync TP2 helper GPU state before save/load |
 | `src/llama-context.cpp:3939` | `jde_state_partial()` — recurrent state only after checkpoint load |
 | `src/llama-kv-cache.cpp:1284-1305` | `llama_kv_hm_get_hook / llama_kv_hm_set_hook` — KVarN-6 head-major state I/O |
+| `src/llama.cpp` (metadata mode) | `exl3_open()` — load exllamav3 checkpoint directory (native, no GGUF conversion) |
+| `src/llama-exl3.h` | EXL3 loader declarations (transforms, tensor producer) |
+| `src/llama-exl3.cpp` | EXL3 loader: safetensors reader, gguf_context builder, T1-T6 transforms |
 | `src/junkinfer/jde_signal.cpp:31` | `jde_signal_install()` — install signal handlers to release TP GPU on exit |
 
 ## jde.cpp Sections (5365 lines)
@@ -210,6 +213,9 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 | `JI_ATTN_TEST`, `JI_ATTN_KVR2`, `JI_TP_TEST` | 0 | kernel self-tests (diag) |
 | `JI_KV_DUMP*`, `JI_ROUTE_DUMP` | unset | debug dumps |
 | `JI_X3_FOLD` | 2 | mul1 decode variant: 0 exact (bit-identical), 1 centred byte sum, 2 raw affine fold (x3_mv decode only) |
+| `JI_EXL3_CHECK` | unset | debug: load a checkpoint directory and oracle GGUF in parallel, compare every tensor (bytes and metadata keys), exit with results |
+| `JI_EXL3_DUMP` | unset | debug: load checkpoint directory; dump named tensors after transforms and re-quantization (e.g., `eh_proj`, `attn_v`) to stderr |
+| Model path syntax | — | `<path>` = GGUF file or exllamav3 checkpoint directory (config.json + model.safetensors.index.json + quantization_config.json); `<dir>::mtp` = checkpoint's MTP layer loaded and re-quantized at load (IQ4_NL dense, Q5_K attn_v, Q6_K head) |
 | `JI_HOST_THP` | 1 | imported host buffers on 2 MiB huge pages with pre-faulting (0 = old 4 KiB pages, ~8-25 % slower) |
 | `JI_PF_KEEPCB` | 0 | keep prefill command buffers between prefills (1 = no pool trim, slower for varied ubatch sizes) |
 

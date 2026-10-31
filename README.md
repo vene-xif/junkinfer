@@ -3,22 +3,24 @@
 Fast local inference of large mixture-of-experts models on junk-priced GPUs.
 First target: **Qwen3.6-35B-A3B and its fine-tunes (`qwen35moe`) on the AMD RX 470/570/580 8 GB (gfx803, Polaris)**.
 
-Status: **usable MVP, project paused (2026-10-26).** OpenAI- and Anthropic-compatible server, tool calls, thinking,
-prompt caching, full 262k context, on one or two RX 580s. Handoff for whoever continues: [HANDOFF.md](HANDOFF.md).
+Status: **usable MVP, project paused (2026-10-26); native EXL3 loading and Sage's own MTP head live (2026-10-31).**
+OpenAI- and Anthropic-compatible server, tool calls, thinking, prompt caching, full 262k context, on one or two RX 580s.
+Server loads exllamav3 checkpoints directly (no conversion) and Sage drafts with its own MTP head. Handoff for whoever
+continues: [HANDOFF.md](HANDOFF.md).
 
-The dev box serves **Sage-A1.5** (InternScience's fine-tune of the same architecture) by default since 2026-10-26:
-two cards, no MTP, decode ~40-45 t/s short, prefill ~540 t/s (7k); Qwen3.6 numbers below (`JI_MODEL=...` selects
-the model).
+The dev box serves **Sage-A1.5** (InternScience's fine-tune of the same architecture) by default since 2026-10-31:
+native EXL3 checkpoint (no GGUF conversion), two cards, own MTP head (p-min 0.8), decode ~47-63 t/s short, prefill
+~537 t/s (7k); Qwen3.6 numbers below (`JI_MODEL=...` selects the model).
 
 Measured on the dev box (EXL3 4.0 bpw, q8_0 KV, sparse attention on, both GPUs capped at 100 W, >= 1024 generated
 tokens), October 2026:
 
-| | two RX 580s (TP2 + MTP) | one RX 580 |
+| | two RX 580s (TP2 + MTP, Sage native) | one RX 580 |
 |---|---|---|
-| decode, short context | 51-61 t/s | ~46 t/s |
+| decode, short context | 47-63 t/s (rewrite / story / explain 47.4 / 62.8 / 55.3) | ~46 t/s |
 | decode, 100k | ~45 t/s | ~34 t/s |
 | decode, 200k-245k | ~32 t/s at 200k (no MTP) | ~30 t/s at 245k |
-| prefill, ~7k prompt | ~550 t/s | ~450 t/s |
+| prefill, ~7k prompt | ~537 t/s | ~450 t/s |
 | prefill, 151k prompt | ~290 t/s | — |
 
 Attention is sparse at long context, on by default as a deliberate trade: decode from 32k context (budget = the

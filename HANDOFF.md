@@ -19,27 +19,23 @@ custom Vulkan decode/prefill engine, **JDE** (`engine/src/junkinfer/`). llama-se
 Targets (README): single card decode >= 50 t/s at any depth; two cards decode >= 80 t/s, prefill >= 1000 t/s at
 zero context and >= 500 t/s at 262k; quality not below EXL3 3.5 bpw weights and q8_0 KV.
 
-## 2. Current state (2026-10-26)
+## 2. Current state (2026-10-31)
 
 **Production = boot service on AUX-1** (`junkinfer.service` -> `scripts/serve_boot.sh` -> `scripts/serve.sh`):
 
 - `http://192.168.1.4:8080/v1` (OpenAI: chat / completions / responses; Anthropic: `/v1/messages`), web UI at `/`.
-  No API key (set `JI_API_KEY` in `/etc/junkinfer.env`). Model alias `qwen3.6-35b-a3b`.
+  No API key (set `JI_API_KEY` in `/etc/junkinfer.env`). Model alias `sage-a1.5`.
 - Two cards enumerated: TP2 tensor-parallel decode + two-card JDE prefill + MTP speculative decoding
-  (= `scripts/serve_prod.sh`). One card: single-card JDE. q8_0 KV, 262,144 context, sparse attention on,
-  thinking on, **Qwen-Sharp chat template** (`ref/templates/qwen_sharp.jinja` = upstream
-  `peculiar-ragdoll/Qwen-Sharp-Chat-Templates` `chat_template.jinja`, identical as of 2026-10-26).
-- Restarts on exit. Verified across two reboots on 2026-10-26: server, thermal guard, fan curve, governor all up.
-  `scripts/smoke_api.py`: ALL PASS (chat, tool-call parsing, prefix cache 6839 -> 23 tokens, prefill 536 t/s).
+  (= `scripts/serve_prod.sh` + native EXL3 + Sage's own MTP head). One card: single-card JDE. q8_0 KV, 262,144 context,
+  sparse attention on, thinking on, **Qwen-Sharp chat template** (`ref/templates/qwen_sharp.jinja`).
+- Restarts on exit. Verified across two reboots on 2026-10-31: server, thermal guard, fan curve, governor all up.
+  `scripts/smoke_api.py`: ALL PASS (chat, tool-call parsing, prefix cache 6839 -> 23 tokens, prefill 537 t/s).
 
-**Sage-A1.5 (boot default, 2026-10-26):** TP2, **no MTP**, Qwen-Sharp template, alias `sage-a1.5`. smoke_api ALL
-PASS (prefill 541 t/s on 6.8k). Decode rewrite / story / explain 39.6 / 45.0 / 41.7 t/s; Qwen3.6 same config and day:
-43.2 / 51.2 / 48.0. Why slower: Sage's EXL3 uses the `mul1` codebook (Qwen3.6: `mcg`); same bit widths, same expert
-hit rate (93.6 vs 93.9 %), but GPU time 21.8 vs 18.0 ms/token — our `mul1` mat-vec costs ~20 % more per weight on
-gfx803 (open-paths #7). MTP: the converter drops Sage's own (EXL3) MTP layer; the Qwen3.6 draft head gains nothing
-on Sage (34.6 / 45.6 / 42.6 with vs 38.6 / 45.1 / 41.7 without; rewrite acceptance 64 % vs 94 % on Qwen), so
-serve_boot.sh turns MTP off for Sage. TP2 hot-expert set regenerated for Sage (`ref/tp/tp_hot_sage15_exl3.bin`;
-top-80 overlap with Qwen's only 36 %; no measurable speed change). Sage quality (KL vs its BF16) is not measured.
+**Sage-A1.5 (boot default, 2026-10-31):** Native EXL3 checkpoint directory `/mnt/ssd/models/Sage-A1.5-exl3-4.0bpw`
+(no GGUF conversion). TP2, **own MTP head** (p-min 0.8), Qwen-Sharp template, alias `sage-a1.5`. Decode rewrite / story /
+explain 47.4 / 62.8 / 55.3 t/s; prefill 537 t/s (6.8k); smoke_api ALL PASS. MTP acceptance 87 / 95 / 91 %. Load ~250 s
+(native 143 s + MTP re-quant 107 s). vs 2026-10-26 (39.6 / 45.0 / 41.7, no MTP): **+22 / +41 / +36 %**. Sage's own MTP
+head (IQ4_NL, Q5_K, Q6_K): outputs identical at every p-min (lossless); Qwen3.6 sidecar on Sage gives no gain (64/88/85 %).
 
 **Measured speed** (AUX-1, both GPUs capped at 100 W, EXL3 4.0 bpw, q8_0 KV, sparse defaults, >= 1024 tokens):
 
@@ -71,9 +67,10 @@ AUX-1 GPUs: **card1 / Vulkan1 = PCIe 3.0 x16 card = primary** (attention, expert
 **card0 / Vulkan0 = chipset PCIe 2.0 x4 card = TP helper** (hot experts resident, MTP head). If only one card
 enumerates, it becomes Vulkan0 (`JI_GPU=0`; serve_boot.sh handles it).
 
-AUX-1 paths: models `/mnt/ssd/models/` (run models only from the SSD), saved KV / states `/mnt/ssd/kvcache/`
-(KL prefix states `jref_v2/`), harness `~/jt/` (snapshot in `tools/aux-jt/`), engine `~/junkinfer/engine`
-(rsynced, **not a git repo**), project `~/junkinfer` (scripts, ref, logs).
+AUX-1 paths: models `/mnt/ssd/models/` (run models only from the SSD; **Sage-A1.5 native checkpoint:**
+`/mnt/ssd/models/Sage-A1.5-exl3-4.0bpw/`), SSD overflow (fill HDD) `~/models/ssd-overflow/` (MiniCPM-V 4.7 GGUF moved
+there 2026-10-31), saved KV / states `/mnt/ssd/kvcache/` (KL prefix states `jref_v2/`), harness `~/jt/` (snapshot
+in `tools/aux-jt/`), engine `~/junkinfer/engine` (rsynced, **not a git repo**), project `~/junkinfer` (scripts, ref, logs).
 
 ## 4. Rules the user set (follow them)
 
@@ -139,6 +136,9 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
   GGML_VK_VISIBLE_DEVICES=0`, i.e. on the x4 card: valid for KL, not for speed.)
   **Never build references on the ggml graph path with large Vulkan blocks**: it loses layer-3 KV writes beyond
   ~8k cells (all pre-2026-10-23 sparse KL numbers were void because of it). v2 refs use 1 GiB blocks + JDE prefill.
+- **Native EXL3 load verification** (`JI_EXL3_CHECK=<oracle.gguf>`): loads a checkpoint directory (`.../config.json +
+  model.safetensors.index.json`) and the oracle GGUF in parallel, compares every tensor (bytes and metadata keys),
+  exits with count of matches and any differences to stderr. Sage-A1.5: 1475 tensors identical except ssm_a (2 ulp).
 - **Decode speed**: `~/jt/mtpsrv.sh` (production config; `NMAX=0` no MTP) + `~/jt/spectest.py` (3 prompts x
   1024 tokens); depth: `scripts/depth_kv.sh N` (restores saved KV from `/mnt/ssd/kvcache`). **Prefill**:
   `scripts/depth_bench.py`, `~/jt/dpb.py`.
@@ -166,7 +166,7 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 0. **TOP PRIORITY (user, 2026-10-26): native EXL3 — load exllamav3 checkpoints without conversion, keep their MTP
    layer and vision tower, make the current `mul1` codebook fast.** Full step-by-step plan, pitfalls, checks and
    remaining headroom: [`engineering-SIREN/current/native-exl3-plan.md`](engineering-SIREN/current/native-exl3-plan.md).
-   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. 2. **Fast mul1 decode [DONE 2026-10-31, engine d44ea8d]**: Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9), prefill 557 t/s (was 541). 3. Native EXL3 loader (plan steps 1-3). 4. Sage's own MTP head. 5. MTP verify-step anomaly. 6. Prefill: two-card time breakdown + balance. 7. EXL3 GEMM energy rewrite. 8. Short-prompt prefill (no re-stream). 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
+   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. 2. **Fast mul1 decode [DONE 2026-10-31, engine d44ea8d]**: Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9), prefill 557 t/s (was 541). 3. **Native EXL3 loader [DONE 2026-10-31, engine 479f8ab]**: checkpoint directory loads directly, no GGUF conversion, 1475 tensors byte-identical vs oracle (ssm_a 2 ulp). 4. **Sage's own MTP head [DONE 2026-10-31, engine f89ed0e]**: IQ4_NL re-quant at load, p-min 0.8 lossless, Sage +22/+41/+36% (47.4/62.8/55.3 t/s), acceptance 87/95/91%. 5. MTP verify-step anomaly. 6. Prefill: two-card time breakdown + balance. 7. EXL3 GEMM energy rewrite. 8. Short-prompt prefill (no re-stream). 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
    It supersedes prior items below. Current items continue (or in parallel where independent).
 
 1. **KVarN-6: prefill from scratch beyond ~64k is wrong** (130k: KL 0.27 single card, 0.118 TP2; 32k 0.00085 and

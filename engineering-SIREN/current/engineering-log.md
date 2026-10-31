@@ -1854,3 +1854,41 @@ every submit; use huge pages for imports and keep them few.
 - Prefill 6.8k: 543 -> 557 t/s (+2.6 %)
 - GPU time per token: 22.1 -> 18.9 ms
 - smoke_api and conv_switch_test ALL PASS
+
+## 2026-10-31 — Native EXL3 loading and Sage's own MTP head (engine 479f8ab, f89ed0e)
+
+### A. Native exllamav3 loading (engine commit 479f8ab; plan steps 1-3 done)
+
+**Problem.** Every model run required `tools/exl3/exl3_to_gguf.py` to convert the Hugging Face checkpoint to GGUF (20+ minutes, 17-19 GB intermediate), and the conversion **dropped the MTP layer and vision tower**. The accepted requirement: load `.../config.json + model.safetensors.index.json + ...` directly.
+
+**Implementation.** A safetensors reader in C++ (`src/llama-exl3.{h,cpp}`, hooked in `src/llama.cpp` `llama_model_load_from_file_impl` through metadata mode) builds the same `gguf_context` the converter would write and fills tensor data on demand with T1-T6 transforms (trellis transpose, GDN permutations, RMSNorm +1, A_log dequant, expert packing, head row drop). Shards are mmapped; transforms are memory moves (fast). Tokenizer (GPT2 BPE, token types, eos/pad/bos) and hparams (from `config.json`) derived at load. Metadata: checked against the converted oracle GGUF via `JI_EXL3_CHECK=<oracle.gguf>` (mode: load both, compare byte-for-byte). Loader change in metadata mode: an optional tensor not in the complete tensor list is not created.
+
+**Evidence (A1 check: Sage-A1.5, TP2 decode, native vs converted GGUF):**
+- 1475 tensors identical (byte exact) except `ssm_a` (30 x 32 floats): 2 ulp difference (np.exp is up to 2 ulp off; native is correctly rounded, computed in double; tools/exl3/exl3_to_gguf.py now uses float64 too).
+- The 1-2 ulp in ssm_a alone: KL 0.00021 on a 32k code row (GDN state decay is very sensitive). A GGUF patched with native ssm_a gives identical KL. The production Sage GGUF on the SSD was patched; backup of old bytes: AUX ~/jt/sage_gguf_ssma_backup.json.
+- Load time (page cache dropped): GGUF 92 s, native 143 s (without MTP). Decode identical: TP2 no MTP 46.4 / 55.1 / 49.8 vs 46.5 / 55.4 / 49.8 t/s. Prefill 557 t/s (6.8k).
+
+**Paths.** The Sage checkpoint is on AUX-1 SSD at `/mnt/ssd/models/Sage-A1.5-exl3-4.0bpw` (19 GB; HDD copy remains at `~/models/Sage-A1.5-exl3-4.0bpw`). The now-redundant converted GGUF was not deleted (needs the user's OK). scripts/serve.sh: `JI_MODEL` accepts a GGUF or a checkpoint directory; default = the Sage directory, fallback to its GGUF, fallback to Qwen3.6 (chosen by mtime).
+
+### B. Sage's own MTP head (engine commit f89ed0e; plan step 4 done)
+
+**Problem.** The converter drops Sage's MTP layer; the Qwen3.6 sidecar gains nothing on Sage (acceptance ~64 % vs 94 % on Qwen), so MTP was off. Goal: use Sage's EXL3 MTP weights, re-quantized at load to what JDE can consume (GGUF quant types).
+
+**Implementation.** A model path `<dir>::mtp` loads the checkpoint's MTP layer as a standalone gguf_context at the same load-time transform cost, then re-quantizes to JDE's specs: token_embd Q8_0, output Q6_K, output_norm, attn_q/k/v/output, ffn_*_exps, norms all re-quantized (IQ4_NL for dense, Q5_K for attn_v, Q6_K for the head); no EXL3 directly in the draft (it needs row slicing). Multi-threaded dequant + re-quant in C++; `JI_EXL3_DUMP=<names>` dumps produced tensors. Verified vs numpy reference (tools/exl3/exl3_ref.py): cosine attn_v 0.99926, eh_proj 0.99647, attn_q 0.99697, one routed expert 0.99700 (re-quantization noise).
+
+**Evidence (Sage TP2, 1024 tokens rewrite / story / explain, acceptance and decode t/s):**
+- No MTP: 46.5 / 55.4 / 49.8 t/s
+- MTP p-min 0.5: 43.1 / 62.2 / 51.9 t/s, acceptance 67 / 92 / 86 %
+- MTP p-min 0.65: 44.3 / 62.8 / 54.0
+- MTP p-min 0.8: 47.6 / 63.7 / 55.9; **production choice (serve_boot.sh): 47.4 / 62.8 / 55.3** (acceptance 87 / 95 / 91 %)
+- MTP p-min 0.9: 47.0 / 62.5 / 54.7
+- MTP p-min 0.95: 43.7 / 61.5 / 51.7
+- Qwen3.6 sidecar on Sage: acceptance 64 / 88 / 85 %, no speed gain. Outputs identical at every p-min (lossless).
+
+**Load and overhead.** Native Sage directory + MTP re-quantization: load ~250 s (MTP adds ~107 s vs 143 s without). serve_boot.sh boot: prefill 537 t/s (6.8k). vs start of 2026-10-31 (38.7 / 44.4 / 40.8 t/s): **+22 / +41 / +36 %** with p-min 0.8, no MTP load in the decode loop.
+
+### C. Open follow-ups
+
+- Load time: cache the MTP re-quantization or run JDE's draft directly on EXL3 (removes the re-quant step).
+- Vision: checkpoint's vision tower not yet loaded (plan step 5).
+- KL reference for Sage: should be re-made from the native load.
