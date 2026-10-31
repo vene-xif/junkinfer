@@ -13,11 +13,30 @@
    the per-layer MoE input x (fp16) - enabled on the production server so real workloads accumulate on the HDD
    (`~/traces`, cap `JI_ROUTE_LOG_MAX_GB`, default 150). Reader: `tools/routes/read_trace.py`. Corpus traces through
    the prefill path later, when the GPUs are free. First datum: 34 % of a token's (layer, expert) selections repeat
-   the previous token's.
-2. Decode-kernel lab bench + contiguous activation reads in `x3_mv` (action #2 below).
-3. **Trace simulation** (offline, VENE CPU): our cache policy vs perfect-knowledge Belady vs router lookahead
-   (layer L+1 / L+2 routers applied to layer L's hidden state) vs MTP-draft prefetch -> the real upper bound of
-   expert prefetch, before engine work.
+   the previous token's. Copies on VENE: `/mnt/chonker/projects/junkinfer/data/traces` (+ `data/router/`: router
+   weights / post-norms as npz, the TP hot file). **Fixed 2026-10-31 (engine 747e1b5):** in TP2 the primary's
+   trace lacked the helper's selections (26 %, logged as 255); older traces get them recomputed from x (exact).
+2. ~~Decode-kernel lab bench + contiguous activation reads in `x3_mv`~~ (done: rejected, -5 %, action #2 below).
+3. **Trace simulation - DONE 2026-10-31** (`tools/routes/sim_cache.py`, 7.7k decoded tokens, TP2 split as in
+   production, primary cache 2984 dynamic slots). The router of layer L+D applied to layer L's MoE input
+   reproduces the real routing exactly for D=0; recall of the true top-8 in the predicted top-8: **D=1 0.80, D=2 0.73,
+   D=3 0.68** (layer 0 weakest, 0.60 / 0.40). Primary misses per decoded token (each = 1.5 MB zero-copy over PCIe,
+   ~0.11 ms, on the critical path):
+
+   | policy | misses / token | extra PCIe copies / token |
+   |---|---|---|
+   | engine now (score decay, <= 8 evictions / token, async fills) | 24.6 | 7.8 fills |
+   | + router lookahead L+1, <= 4 prefetches / layer | 14.3 | 5.9 fills + 23.9 prefetches |
+   | + router lookahead L+2 | 16.0 | 6.4 + 26.0 |
+   | oracle L+1 (true ids, same budget) | 10.4 | 4.5 + 20.1 |
+   | write-through fill (the zero-copy miss kernel stores the expert into a victim slot) | 19.7 | 0 |
+   | write-through + router lookahead L+1 | **8.8** | 22.4 prefetches |
+   | Belady (demand fill, perfect future knowledge) | 8.65 | 0 |
+   | write-through + oracle L+1 (1500-token subset) | 1.9 | 25 |
+
+   Reading: prefetch trades ~2 copies per avoided miss, but the copies run on otherwise idle PCIe time (misses are
+   ~25 % of a step); write-through fill is free traffic and beats the engine's policy; the oracle row bounds what a
+   learned predictor (step 6) can add on top of the router lookahead. MTP-draft prefetch not simulated yet.
 4. **Router-lookahead expert prefetch**: predicted misses copied into cache slots by the async fill queue (DMA)
    1-2 layers ahead (a layer ~0.5 ms; an expert ~0.13 ms over x16), plus MTP-draft token prefetch. Estimated
    +15-30 % decode (bounded by miss bytes / PCIe bandwidth; decode is ~16 ms experts of ~20 ms per token).
