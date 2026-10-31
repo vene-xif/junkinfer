@@ -1935,3 +1935,46 @@ every submit; use huge pages for imports and keep them few.
 - `scripts/smoke_api.py` (chat, prefix-cache reuse, tool calls): ALL PASS, prefill 537 t/s on 6.8k.
 
 Step 8 closed.
+
+## 2026-10-31 — Plan step 7 (EXL3 GEMM for energy per FMA), first part: narrow expert tiles (engine f0dcb49)
+
+**Goal:** Prefill routed-expert GEMMs are latency-bound (~30 % of FMA peak on 32-column tiles, ~57 % on 64-column); overhead (staging, LDS round trips, barriers, Hadamard epilogue) is ~28 % of total time as VALU work that cannot overlap the FMA loop. Rewrite the smallest tile variants (expert remainders) with a register-based strategy that keeps waves busy on FMA and reduces per-column LDS re-reads.
+
+**Implementation.** Two changes:
+
+1. **New kernel `src/junkinfer/shaders/pf_mv_id.comp`** (from `lab/mmbench/mv_id.comp`): the mat-vec way for expert remainders of <= 8 rows. Per 128-output block, 4 waves, each a quarter of K; per 16-deep k-tile a lane decodes 4 positions of 4 stripes into registers and reuses its x rows (all tokens, from LDS) over them. Column sums, cross-wave K sums in LDS, Hadamard-128, svh, store. Design: 4 stripes per pass, NT=8, no register prefetch → 84 VGPRs best (tested: 8 stripes 140 VGPRs slower; register prefetch raised VGPRs and was slower on gfx8; NT=16 kernels 120-152 VGPRs slower than pf_mm_id32 for 9-16 rows).
+
+2. **Variant dispatch:** `pf_rowmap.comp` gained a third tile list (binding 5, narrow tiles, push constants NR / off3). Environment: `JI_PF_NARROW` (default 1; 0 = old pf_mm_id32 path). Benchmarks from `lab/mmbench` (mmbench.cpp + build.sh): runs prefill routed-expert GEMMs on synthetic EXL3 experts with skewed routing. Kernel sets given as "spv:maxrows,..." (each expert's rows cut into tiles of the largest kernel; remainders to the smallest kernel that holds them). Max |d| checked vs the first variant; one projection timed, RADV_DEBUG=shaderstats prints VGPRs.
+
+**Baseline metrics** (gate 2048->512, 200 experts, 100 W, bench not running yet):
+- 150 tokens: 4.45 ms (282 GFMA/s useful)
+- 1000 tokens: 6.7 ms (1260 GFMA/s)
+- 4000 tokens: 19.8 ms (1696 GFMA/s)
+- BK32 variants: ~20 % slower than BK16
+
+**Ablation findings:**
+- **Large 64-column tiles:** FMA loop runs near FMA peak; decode ~8 %; the rest of overhead (~28 % total: staging, LDS round trips, barriers, Hadamard epilogue) is VALU work that cannot overlap the FMA loop.
+- **Small tiles in pf_mm:** Each wave gets 8 columns (pf_mm dispatch), so a tile with a few rows keeps one wave of the 4 busy with FMAs, and each thread re-reads decoded weights from LDS per column (LDS-bound).
+- **Narrow tile variant:** 4 stripes per pass, each lane keeps its x registers across 4 columns → lower LDS pressure, all lanes do FMAs. Trade-off: narrower per-tile K-loop iteration count (K/4 passes for 4 stripes).
+
+**Bench results** (Sage, prefill gate 2048->512, baseline all-pf_mm_id32):
+- 150 tokens: 4.45 -> 2.52 ms (gate), down (512->2048 gate, full prefill) 4.35 -> ~2.4 ms
+- 500 tokens: -5 to -7 %
+- >= 1000 tokens: ~1-3 %
+
+**Correctness verification** (KL vs Sage reference, 32k code row, tail through the prefill in 256-token ubatches, TP2):
+- With and without narrow tiles: KL 0.00036 (identical), p99 0.0061, top1 0.9961
+- Tail time: 18.3 -> 17.4 s (slight speedup from the narrow variant in tail evaluation)
+- **Pitfall (lessons):** kl_v2.sh's default `JR_TAIL_B=4` evaluates the tail through the DECODE path, so it does not test prefill kernels. Use `JR_TAIL_B=256` (or the ubatch size) for prefill changes.
+
+**Production results** (Sage TP2, 100 W boot config, engine f0dcb49, JI_PF_NARROW default 1):
+- 1159 tokens: 418 -> 448 t/s
+- 2184 tokens: 530 -> 547 t/s
+- 7820 tokens: 573 -> 575 t/s
+- Chat turn (984 new tokens): 2607 -> 2432 ms (-6.7 %)
+- Decode unchanged: 54.0 / 52.5 / 48.9 t/s at 1k / 2k / 8k context
+- `scripts/conv_switch_test.py`: ALL PASS
+
+**Remaining step 7 headroom:** The large-tile overhead (~28 % of MoE GEMM time) would need a rewrite that cuts VALU work per k-step (staging, LDS round trips, epilogue barriers); estimated 10-15 % of MoE GEMM time remaining, ~5-7 % of total prefill. Parked pending design review.
+
+Step 7 partly done (narrow tiles).

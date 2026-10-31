@@ -17,4 +17,7 @@ for a in NODEC NOFMA NOEPI; do $G2 -DBN8 -DABL_$a mm2.comp -o n8_$a.spv; $G2 -DB
 G3="glslc --target-env=vulkan1.2 -O -DBITS=4"
 for nt in 4 8 16; do for sv in 2 4 8; do for pf in 0 1; do
   $G3 -DNT=$nt -DS=$sv -DPF=$pf mv_id.comp -o mv${nt}_s${sv}_p${pf}.spv; done; done; done
+$G -DBK16 -DBN128 -DR8 pf_mm.comp -o r128.spv
+$G -DBK16 -DBN64 -DR8 pf_mm.comp -o r64.spv
+$G -DBK16 -DBN64 -DT128 pf_mm.comp -o t64.spv
 echo built

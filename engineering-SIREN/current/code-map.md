@@ -127,6 +127,7 @@
 | Name | Purpose |
 |------|---------|
 | `pf_mm.comp` | Prefill GEMM (EXL3 trellis weights), dense and expert variants, windowed for TP |
+| `pf_mv_id.comp` | Prefill narrow expert tile mat-vec (remainders <= 8 rows): register-based, 4 stripes per pass |
 | `pf_qk.comp` | Prefill attention prep: q/k rms + RoPE → cache, T positions |
 | `pf_fa.comp` | Prefill flash attention, 4 positions per workgroup, q8_0 K/V, sparse/dense |
 | `pf_fa_sparse.comp` | Sparse prefill attention: page-based sampling + background |
@@ -141,7 +142,7 @@
 | `pf_combine.comp` | Prefill combine (shared + routed) |
 | `pf_add.comp`, `pf_add2*.comp` | Prefill add (residual, format variants) |
 | `pf_topk.comp` | Prefill top-K expert selection |
-| `pf_rowmap.comp` | Prefill row mapping |
+| `pf_rowmap.comp` | Prefill row mapping (tile dispatch for dense, wide experts, narrow expert remainders) |
 | `pf_prep.comp` | Prefill input prep |
 | `pf_gdn_*.comp` | Prefill GDN conv, rule, state |
 
@@ -218,6 +219,7 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 | `JI_EXL3_DUMP` | unset | debug: load checkpoint directory; dump named tensors after transforms and re-quantization (e.g., `eh_proj`, `attn_v`) to stderr |
 | Model path syntax | — | `<path>` = GGUF file or exllamav3 checkpoint directory (config.json + model.safetensors.index.json + quantization_config.json); `<dir>::mtp` = checkpoint's MTP layer loaded and re-quantized at load (IQ4_NL dense, Q5_K attn_v, Q6_K head) |
 | `JI_HOST_THP` | 1 | imported host buffers on 2 MiB huge pages with pre-faulting (0 = old 4 KiB pages, ~8-25 % slower) |
+| `JI_PF_NARROW` | 1 | use narrow expert tile kernels (pf_mv_id.comp) for routed-expert remainders <= 8 rows (0 = old pf_mm_id32 path) |
 | `JI_PF_KEEPCB` | 0 | keep prefill command buffers between prefills (1 = no pool trim, slower for varied ubatch sizes) |
 
 ## Project Scripts
@@ -262,6 +264,7 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 ### lab/
 | Dir/File | Purpose |
 |----------|---------|
+| `mmbench/` | Prefill routed-expert GEMM micro-benchmark: mmbench.cpp + build.sh, synthetic EXL3 experts with skewed routing, kernel variant testing, VGPR inspection |
 | `matvec/` | Matvec kernel lab / tuning |
 | `xsync/` | Cross-GPU sync lab / experiments |
 | `xferbench/` | Transfer benchmark (PCIe throughput) |
