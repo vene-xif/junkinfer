@@ -14,7 +14,7 @@ export JI_SLOT_DIR=${JI_SLOT_DIR:-/mnt/ssd/kvcache}
 # the converter drops Sage's EXL3 MTP layer and the Qwen3.6 head gains nothing on it (2026-10-26: rewrite / story /
 # explain 34.6 / 45.6 / 42.6 t/s with it vs 38.6 / 45.1 / 41.7 without)
 MTP_DEF=1
-[ -z "${JI_MODEL:-}" ] && [ -f /mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf ] && MTP_DEF=0
+[ -z "${JI_MODEL:-}" ] && { [ -e /mnt/ssd/models/Sage-A1.5-exl3-4.0bpw ] || [ -f /mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf ]; } && MTP_DEF=0
 case "${JI_MODEL:-}" in *Sage-A1.5*) MTP_DEF=0 ;; esac
 if [ "$ncards" -ge 2 ] && [ "${JI_TP:-2}" != 0 ]; then
   export JI_TP=${JI_TP:-2} JI_JPF=${JI_JPF:-1} JI_MTP=${JI_MTP:-$MTP_DEF}

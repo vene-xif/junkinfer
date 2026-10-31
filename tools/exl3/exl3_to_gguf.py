@@ -248,7 +248,7 @@ def main():
             add_exl3(b + "ssm_out", A + "out_proj", kperm=vperm)
             add_f32(b + "ssm_alpha.weight", lambda A=A: st.f32(A + "in_proj_a.weight")[vperm], [nv, tc["hidden_size"]])
             add_f32(b + "ssm_beta.weight", lambda A=A: st.f32(A + "in_proj_b.weight")[vperm], [nv, tc["hidden_size"]])
-            add_f32(b + "ssm_a", lambda A=A: -np.exp(st.f32(A + "A_log"))[vperm], [nv])
+            add_f32(b + "ssm_a", lambda A=A: (-np.exp(st.f32(A + "A_log").astype(np.float64))).astype(np.float32)[vperm], [nv])   # float64: correctly rounded (= native loader)
             add_f32(b + "ssm_dt.bias", lambda A=A: st.f32(A + "dt_bias")[vperm], [nv])
 
             def conv(A=A):

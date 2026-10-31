@@ -5,7 +5,8 @@
 # Environment (all optional):
 #   JI_HOST=0.0.0.0        listen address (default 127.0.0.1: local only)    JI_PORT=8080
 #   JI_API_KEY=secret      require "Authorization: Bearer secret" (OpenAI) / "x-api-key" (Anthropic)
-#   JI_MODEL=path.gguf     model (default: Sage-A1.5 EXL3 4.0 bpw if present, else Qwen3.6-35B-A3B EXL3 4.0 bpw)
+#   JI_MODEL=path          model: a GGUF or an exllamav3 checkpoint directory (default: Sage-A1.5 EXL3 4.0 bpw directory,
+#                          else its GGUF, else Qwen3.6-35B-A3B EXL3 4.0 bpw)
 #   JI_ALIAS=name          model name reported to clients (default: sage-a1.5 / qwen3.6-35b-a3b by model file)
 #   JI_THINKING=off        default thinking off (clients can still enable it per request with
 #                          chat_template_kwargs {"enable_thinking": true}); default: on
@@ -25,9 +26,11 @@ set -euo pipefail
 ENGINE=${JUNKINFER_ENGINE:-$HOME/junkinfer/engine/build/bin}
 # default model (2026-10-26, user): Sage-A1.5 (InternScience, a Qwen3.5/3.6-MoE fine-tune, same architecture and
 # tokenizer; jyohukuchan/Sage-A1.5-exl3-4.0bpw converted with tools/exl3/exl3_to_gguf.py), else Qwen3.6-35B-A3B
-DEFAULT_MODEL=/mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf
-[ -f "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf
-[ -f "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-IQ4_NL.gguf
+# A model may be an exllamav3 checkpoint directory: loaded natively, no GGUF conversion (engine llama-exl3.cpp, 2026-10-31)
+DEFAULT_MODEL=/mnt/ssd/models/Sage-A1.5-exl3-4.0bpw
+[ -e "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Sage-A1.5-exl3-4.00bpw.gguf
+[ -e "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-A3B-exl3-4.00bpw.gguf
+[ -e "$DEFAULT_MODEL" ] || DEFAULT_MODEL=/mnt/ssd/models/Qwen3.6-35B-IQ4_NL.gguf
 MODEL=${1:-${JI_MODEL:-$DEFAULT_MODEL}}
 case "$(basename "$MODEL")" in
   Sage-A1.5*) DEF_ALIAS=sage-a1.5 ;;
