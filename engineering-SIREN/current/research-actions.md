@@ -32,7 +32,7 @@
 | # | Action | Source | Expected gain | Effort | Status |
 |---|---|---|---|---|---|
 | 1 | **Decode-kernel lab bench** (`x3_mv` on Sage shapes, real layout) before any ISA trick | A + our data | enables 2-5 | 0.5 day | open |
-| 2 | **Contiguous activation reads in `x3_mv`**: write the Hadamard-prepped input in the tile-row order a lane uses (rows r0, r0+1, r0+8, r0+9 -> 4 adjacent floats) so the 4 LDS reads per tile per token become one `ds_read_b128`. Bit-identical. | A | ~0.75 op/weight saved (~7 %), more with MTP multi-token steps | 1 day | open |
+| 2 | ~~**Contiguous activation reads in `x3_mv`**~~ REJECTED 2026-10-31 (measured: permuted staging made every x3_mv variant ~5 % slower per call, e.g. 8192x2048 88.9 -> 93.5 us, MoE 99.8 -> 107.2 us; the 4 scalar LDS reads were already cheap broadcasts, the staging index math cost more) - original idea:: write the Hadamard-prepped input in the tile-row order a lane uses (rows r0, r0+1, r0+8, r0+9 -> 4 adjacent floats) so the 4 LDS reads per tile per token become one `ds_read_b128`. Bit-identical. | A | ~0.75 op/weight saved (~7 %), more with MTP multi-token steps | 1 day | open |
 | 3 | **MTP speculative sampling at temperature > 0**: our fork accepts a draft only if it equals the target's sampled token (`common_sampler_sample_and_accept_n`, exact match). Proper speculative sampling: sample the draft from p_draft, accept with min(1, p_t/p_d), on reject resample from max(0, p_t - p_d). Output distribution unchanged. Our MTP head gives p_draft (top 65k vocab). | B | acceptance at temp 0.6-0.7 up substantially (27B graph test: 0.49-0.60 per draft); est. +10-25 % decode in sampled chat; zero at temp 0 | 2-3 days | open - measure Sage acceptance at temp 0.7 first |
 | 4 | **Integer accumulate in decode**: quantise rotated activations to 13-bit ints per 128 block; byte sum t (<= 1005) x a with `v_mad_i32_i24` (no `v_cvt_f32_u32` per weight); affine A*sum + C*sum(x) once per output (fold). | A | ~1 op/weight | 2 days | open - needs KL gate |
 | 5 | **`v_sad_u8` byte sum** (1 full-rate instr; today 2 `v_add_u32_sdwa` per weight). Not reachable from GLSL: needs a NIR algebraic rule (4-byte sum -> `sad_u8x4`, ACO emits `v_sad_u8`) in a side-built Mesa loaded via `VK_ICD_FILENAMES`. The one case where a driver patch pays. | A | ~1 op/weight in decode and prefill | 2-3 days + keeping a Mesa build | open - only if #1 shows decode is still ALU-bound |
@@ -44,6 +44,9 @@
 | 11 | DPP / `ds_swizzle` instead of generic `subgroupShuffleXor` in the Hadamard stages (x3_prep / x3_post / FUSEP / FUSEQ) | A | few % of prep/post kernels | 1 day | low priority |
 
 ## Measured facts that bound these ideas
+
+- Greedy output is deterministic within one server instance (same md5 x3, 512 tokens) but differs across instances
+  (expert-cache contents decide which misses take which compute path): A/B tests across builds must use KL, not md5.
 
 - `lab/cbdecode` (single RX 580): mcg, mul1 raw (fold), and the 24-bit-split variants of both all run at exactly
   293.1 G decodes/s; exact mul1 247, reference 188. Replacing the quarter-rate `v_mul_lo_u32` with two full-rate
