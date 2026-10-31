@@ -2,7 +2,7 @@
 
 Status: **opt-in (`JI_KVARN=1`), quality gate pending**. Engine: 356031b68 (simulation), 21a180646 (`attn_kvr6`),
 ac2eed747 (integration), plus 2026-10-23 fixes (rings at init, state-hook view tensors, attach before state load).
-History: engineering log 2026-10-18 (late night), 2026-10-23.
+History: engineering log 2026-10-18 (late night), 2026-10-23, 2026-10-31 (from-scratch item resolved as harness artefact).
 
 ## What it is
 
@@ -107,6 +107,12 @@ teardown and on fatal signals. See `features/README.md` (operational hazards).
 | 247k full prefill / decode | — | 432 t/s / 38.0 t/s |
 
 KL gate (`kl.sh L_code 0 JI_TP=2 JI_KVARN=1`, vs our full-attention q8_0 reference; q8 baseline 0.00020): **pending**.
+
+## From-scratch quality (2026-10-31, resolved)
+
+**Earlier concern:** 130k from-scratch prefill scored KL 0.27 in the harness. Root cause: the KL harness (`~/jt/kl_v2.sh`) never set `JI_JPF=1`, so all prefills used the ggml graph-path engine, which does not build KVarN records or the window ring. A saved state from graph-path prefill had buffer corruption (rel. error 1.000 everywhere), while the tail through decode matched q8_0 to digit; the high KL was thus meaningless.
+
+**Resolution:** With JDE prefill (now default in the harness): Qwen 32k from scratch, single card, sparse off — q8_0 KL 0.00071 / top1 0.9971, KVarN 0.00092 / top1 0.9893. KVarN from-scratch is correct. A 130k TP2 confirmation run (job88) is pending. The graph-path prefill artefact had been tested with many dead-end knobs (`JI_PF_CBALL`, `JI_ELASTIC=0`, `JI_STATIC=0`, `JI_KVR_PFT=1`, in-process state reload) — all bit-identical, confirming that the path itself was the problem.
 
 ## Porting notes
 

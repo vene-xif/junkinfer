@@ -169,20 +169,16 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 0. **TOP PRIORITY (user, 2026-10-26): native EXL3 — load exllamav3 checkpoints without conversion, keep their MTP
    layer and vision tower, make the current `mul1` codebook fast.** Full step-by-step plan, pitfalls, checks and
    remaining headroom: [`engineering-SIREN/current/native-exl3-plan.md`](engineering-SIREN/current/native-exl3-plan.md).
-   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. 2. **Fast mul1 decode [DONE 2026-10-31, engine d44ea8d]**: Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9), prefill 557 t/s (was 541). 3. **Native EXL3 loader [DONE 2026-10-31, engine 479f8ab]**: checkpoint directory loads directly, no GGUF conversion, 1475 tensors byte-identical vs oracle (ssm_a 2 ulp). 4. **Sage's own MTP head [DONE 2026-10-31, engine f89ed0e]**: IQ4_NL re-quant at load, p-min 0.8 lossless, Sage +22/+41/+36% (47.4/62.8/55.3 t/s), acceptance 87/95/91%. 5. **MTP verify-step anomaly [CONCLUDED 2026-10-31]**: no bug; per-step decode cost 19.7 / 35.8 / 45.7 ms for 1 / 2 / 3 tokens is MoE-bound (each token routes to mostly different experts). 6. **Prefill two-card breakdown and balance [CONCLUDED 2026-10-31]**: no cheap win; helper GPU busy 99.7 %, primary waits ~0.9 s per 4k-token batch; mixer all-reduce over the helper's PCIe 2.0 x4 is the limiter (6.4 s vs 5.0 s on the primary). Cards equal in ALU (292 vs 293 Gdecode/s). 7. **EXL3 GEMM energy rewrite [PARTLY DONE 2026-10-31, engine f0dcb49]**: narrow expert tiles (pf_mv_id.comp) for remainders <= 8 rows; prefill -5 to -7 % at 500 tokens, ~1-3 % at >=1000. Remaining: large-tile overhead (~28 % of MoE GEMM time, ~5-7 % of prefill) needs VALU work per k-step cut; estimated 10-15 % win. 8. **Short-prompt prefill (no re-stream) [DONE 2026-10-31, engine 14eb6fe, f519a49]**: llama-server was splitting chat prompts at the last user message start; fixed with new `JI_CKPT_SPLIT_MIN` (default 2048). Prefill t/s: 1159 tokens 208 -> 420, first chat turn 5564 -> 4898 ms. Decode unchanged. 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
+   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. 2. **Fast mul1 decode [DONE 2026-10-31, engine d44ea8d]**: Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9), prefill 557 t/s (was 541). 3. **Native EXL3 loader [DONE 2026-10-31, engine 479f8ab]**: checkpoint directory loads directly, no GGUF conversion, 1475 tensors byte-identical vs oracle (ssm_a 2 ulp). 4. **Sage's own MTP head [DONE 2026-10-31, engine f89ed0e]**: IQ4_NL re-quant at load, p-min 0.8 lossless, Sage +22/+41/+36% (47.4/62.8/55.3 t/s), acceptance 87/95/91%. 5. **MTP verify-step anomaly [CONCLUDED 2026-10-31]**: no bug; per-step decode cost 19.7 / 35.8 / 45.7 ms for 1 / 2 / 3 tokens is MoE-bound (each token routes to mostly different experts). 6. **Prefill two-card breakdown and balance [CONCLUDED 2026-10-31]**: no cheap win; helper GPU busy 99.7 %, primary waits ~0.9 s per 4k-token batch; mixer all-reduce over the helper's PCIe 2.0 x4 is the limiter (6.4 s vs 5.0 s on the primary). Cards equal in ALU (292 vs 293 Gdecode/s). 7. **EXL3 GEMM energy rewrite [PARTLY DONE 2026-10-31, engine f0dcb49]**: narrow expert tiles (pf_mv_id.comp) for remainders <= 8 rows. Correctness (L_code 32k TP2, tail via JDE prefill 256 tokens, engine f0dcb49): `JI_PF_NARROW=0` KL 0.00015 / top1 0.9990, `JI_PF_NARROW=1` KL 0.00012 / top1 1.0000. Prefill speedup: 500 tokens -5 to -7 %, >=1000 tokens ~1-3 %. Remaining: large-tile overhead (~28 % of MoE GEMM time, ~5-7 % of prefill) needs VALU work per k-step cut; estimated 10-15 % win. 8. **Short-prompt prefill (no re-stream) [DONE 2026-10-31, engine 14eb6fe, f519a49]**: llama-server was splitting chat prompts at the last user message start; fixed with new `JI_CKPT_SPLIT_MIN` (default 2048). Prefill t/s: 1159 tokens 208 -> 420, first chat turn 5564 -> 4898 ms. Decode unchanged. 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
    It supersedes prior items below. Current items continue (or in parallel where independent).
 
-1. **KVarN-6: prefill from scratch beyond ~64k is wrong** (130k: KL 0.27 single card, 0.118 TP2; 32k 0.00085 and
-   64k 0.00115 are fine; decode from restored states is fine everywhere: 0.0005-0.0011).
-   Found so far (2026-10-25): not the separate prefill copy buffer (`JI_KVR_PFT=1` at 32k = same KL). A from-scratch
-   130k state vs the reference (`kvrblk.py`): layer 3 (first attention layer) exact everywhere (1.8 % = KVarN
-   noise); later layers deviate from cell **12288** on (the first ubatch that attends over materialised sealed
-   records), moderately (rel. error 0.02-0.19), and the recurrent state drifts 0.3-7.7 %. That looks like
-   compounding quantisation noise, not a broken region — yet the final KL is 200x the 64k value.
-   **Next step: `~/jt/job40.sh`** (written, not run; state kept in `/mnt/ssd/kvcache/tmp_j36`): restore that
-   from-scratch state and run the tail with `JI_KVARN=1` and `=0`. Bad KL with both -> the state is bad (then bisect
-   by depth: 64k / 98k rows from scratch; check `jde_kvr_pf_materialize` / `kvr_mat` / the seal at each ubatch
-   end in `jde_prefill.inc`); good KL -> the bug is in the in-process tail evaluation after a long prefill.
+1. **KVarN-6: prefill from scratch beyond ~64k [RESOLVED 2026-10-31 as harness artefact]**: The KL harness
+   measured 130k: KL 0.27 single card because it ran the ggml graph-path prefill (kl_v2.sh never set `JI_JPF=1`),
+   which does not build KVarN records or the window ring; a saved state had rel. error 1.000 everywhere (empty/garbage).
+   The tail through graph-path prefill matched q8_0 to digit. With JDE prefill: Qwen 32k from scratch single card
+   KL 0.00071 / top1 0.9971, KVarN 0.00092 / top1 0.9893 — KVarN works. A 130k TP2 confirmation (job88) is
+   pending. Dead ends (all graph-path): compute-buffer slot eviction, `JI_ELASTIC=0`, `JI_STATIC=0`, `JI_KVR_PFT=1`,
+   in-process state reload — all bit-identical. Item closed.
 2. **KVarN-6 decode at 200k is slower**: 25.1 / 27.4 t/s vs q8 32.4 (VRAM spill ruled out after the ring fix).
    Next: `JI_PROFILE_GPU=1` at 200k, compare `attn_kvr6q` + `attn_kvr6` vs `attn_hm`.
 3. Then KVarN K6V5 / K6V4 asymmetric variants (user-approved), end-to-end gate, make it default if it wins.
@@ -216,6 +212,8 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
   overhead per submit; 2 MiB alignment + MADV_HUGEPAGE + pre-fault cuts that to 0.1 ms).
 - A per-batch fixed cost is not necessarily transfer: measure the kernel (JI_PF_VRAMX removed the PCIe upload for 15 % of
   experts and changed nothing).
+- **A KL check is only as good as the path it runs:** confirm the JDE prefill actually ran (count "jde prefill TL rank 0" lines with `JI_PF_TL=1 KLX="-lv 4"`). The harness ran the graph-path prefill for weeks.
+- **Stop the boot service with `~/jt/stopsrv.sh`**, never `stop + sleep`. The service may still be starting; stopsrv waits until all daemons exit.
 
 ## 11. Document map
 

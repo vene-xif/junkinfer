@@ -1978,3 +1978,39 @@ Step 8 closed.
 **Remaining step 7 headroom:** The large-tile overhead (~28 % of MoE GEMM time) would need a rewrite that cuts VALU work per k-step (staging, LDS round trips, epilogue barriers); estimated 10-15 % of MoE GEMM time remaining, ~5-7 % of total prefill. Parked pending design review.
 
 Step 7 partly done (narrow tiles).
+
+## 2026-10-31 — KL harness graph-path prefill artefact; KVarN from-scratch item closed; narrow tiles re-validated
+
+### The harness KL issue
+
+**Discovery:** The KL harness (`~/jt/kl_v2.sh` on AUX-1) never set `JI_JPF=1`, so every prompt/prefix prefill in KL runs used the ggml graph path; only decode used JDE. Production (`serve_boot.sh`, `serve_prod.sh`) sets `JI_JPF=1` (default since engine 14eb6fe). Fixed 2026-10-31: kl_v2.sh now passes `JI_JPF=${JI_JPF:-1}` to default to JDE prefill. Backup: `kl_v2.sh.bak_j85`.
+
+**Ubatch depth issue:** With ubatch 256, the ggml compute buffer is only 396 MiB but JDE prefill needs 847 MiB scratch for 256 tokens, so it falls back to the graph path. Production large-buffer tests in the harness need care: either use `UB=4096` (default) and set `JR_TAIL_B=256` for 256-token tail evaluation, or fix the compute buffer depth. To verify JDE prefill ran: `JI_PF_TL=1` with `KLX="-lv 4"` and count "jde prefill TL rank 0" lines; a tail-via-prefill KL identical to q8 in every digit is a red flag (that tail evaluated through decode, not prefill).
+
+### Narrow-tile KL re-validation
+
+**Earlier finding:** The narrow-tile KL check at engine f0dcb49 recorded 0.00036 identical with and without `JI_PF_NARROW=1`. That check ran through the decode path (kl_v2.sh `JR_TAIL_B=4`, default tail via decode); it did not exercise the JDE prefill.
+
+**Re-validated through the JDE prefill** (Sage TP2, ubatch 4096, tail batches of 256, 4 JDE prefill batches, 0 graph fallbacks; engine f0dcb49, KLX="-lv 4" 200 steps, L_code 32k):
+- `JI_PF_NARROW=0`: KL 0.00015 / p99 0.0024 / max 0.013 / top1 0.9990, tail 13.5 s
+- `JI_PF_NARROW=1`: KL 0.00012 / p99 0.0023 / max 0.007 / top1 1.0000, tail 13.1 s
+
+**Correctness:** narrow tiles are clean. The earlier step-7 log entry's correctness line stands with the caveat (added now): "KL 0.00036 was measured tail-via-decode; through-prefill variant shows 0.00012–0.00015 (above)."
+
+### KVarN from-scratch item resolved
+
+**Status change:** Open work "KVarN-6: prefill from scratch beyond ~64k is wrong (130k: KL 0.27 at 130k)" closes as a **harness artefact**. The KL harness used the graph-path prefill, which does not build KVarN records or the window ring; a saved state compared per layer/cell against a reference (kvrblk.py) had relative error 1.000 everywhere (i.e., buffers were empty or garbage), while the tail through the graph-path prefill matched q8_0 to every digit.
+
+**With JDE prefill:** Qwen 32k from scratch, single card, sparse off: q8_0 KL 0.00071 / top1 0.9971, KVarN 0.00092 / top1 0.9893. KVarN works from scratch. A 130k TP2 confirmation run (job88) is in progress — write "130k confirmation pending" in the docs once it completes.
+
+**Production validation:** The 130k "from scratch" q8_0 KL numbers measured today (0.0064 exact, 0.0089 default sparse; identical on the 10-24 engine d9909dc) were graph-path prefill + JDE decode, not production. Production long-context quality was not regressed (same numbers on the old engine).
+
+**Dead ends recorded** (all on graph-path artefact): compute-buffer slot eviction (`JI_PF_CBALL`), `JI_ELASTIC=0`, `JI_STATIC=0`, `JI_KVR_PFT=1`, in-process state reload — all bit-identical.
+
+### Service stop helper and incident
+
+**New script:** `~/jt/stopsrv.sh` on AUX-1 (snapshot in `tools/aux-jt/stopsrv.sh`). It stops the boot service and waits until no llama-server / llama-junk-ref / llama-completion / llama-cli process remains. All job scripts should call it before starting a test (instead of `systemctl stop junkinfer; sleep 5`).
+
+**Incident 06:37 today:** A job did `systemctl stop junkinfer; sleep 5` while the service was still starting up. The stop had not taken effect, llama-junk-ref started, and two model processes OOMed the box, triggering a reboot. The service needs a synchronisation point: it now waits for all daemons to exit (see `stopsrv.sh`).
+
+**Job scripts policy:** on AUX-1, use `sudo -n` (passwordless works); never write passwords into files.
