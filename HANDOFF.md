@@ -26,7 +26,7 @@ zero context and >= 500 t/s at 262k; quality not below EXL3 3.5 bpw weights and 
 - `http://192.168.1.4:8080/v1` (OpenAI: chat / completions / responses; Anthropic: `/v1/messages`), web UI at `/`.
   No API key (set `JI_API_KEY` in `/etc/junkinfer.env`). Model alias `sage-a1.5`.
 - Two cards enumerated: TP2 tensor-parallel decode + two-card JDE prefill + MTP speculative decoding
-  (= `scripts/serve_prod.sh` + native EXL3 + Sage's own MTP head). One card: single-card JDE. q8_0 KV, 262,144 context,
+  (= `scripts/serve_prod.sh` + native EXL3 + Sage's own MTP head). One card: single-card JDE. **KVarN-6 KV cache on by default** (`JI_KVARN=1`), 262,144 context,
   sparse attention on, thinking on, **Qwen-Sharp chat template** (`ref/templates/qwen_sharp.jinja`).
 - Restarts on exit. Verified across two reboots on 2026-10-31: server, thermal guard, fan curve, governor all up.
   `scripts/smoke_api.py`: ALL PASS (chat, tool-call parsing, prefix cache 6839 -> 23 tokens, prefill 537 t/s).
@@ -40,14 +40,13 @@ explain 47.4 / 62.8 / 55.3 t/s; prefill 537 t/s (6.8k, batch 1); smoke_api ALL P
 (native 143 s + MTP re-quant 107 s). vs 2026-10-26 (39.6 / 45.0 / 41.7, no MTP): **+22 / +41 / +36 %**. Sage's own MTP
 head (IQ4_NL, Q5_K, Q6_K): outputs identical at every p-min (lossless); Qwen3.6 sidecar on Sage gives no gain (64/88/85 %).
 
-**Measured speed** (AUX-1, both GPUs capped at 100 W, EXL3 4.0 bpw, q8_0 KV, sparse defaults, >= 1024 tokens):
+**Measured speed** (AUX-1, both GPUs capped at 100 W, EXL3 4.0 bpw, **KVarN-6 KV by default**, sparse defaults, >= 1024 tokens):
 
 | | value | config / date |
 |---|---|---|
-| decode, short context | 51-61 t/s (rewrite / story / explain 51.6 / 61.1 / 55.8) | TP2 + MTP, 2026-10-25 |
-| decode, short, no MTP | ~59 t/s | TP2, 2026-10-21 |
-| decode at 200k | 32.4 t/s (dense 25.6) | TP2, no MTP, 2026-10-24 |
-| prefill, ~7k prompt | ~530-555 t/s | TP2 JDE prefill, 2026-10-23 |
+| decode, short context | 53.9 / 64.6 / 58.8 t/s (rewrite / story / explain, TP2 + MTP Sage) | 2026-10-31 |
+| decode at 200k | 34.5 t/s (q8_0 33.1) | TP2, sparse defaults, 2026-10-31 (KVarN sparse optim) |
+| prefill, ~7k prompt | ~537-557 t/s | TP2 JDE prefill, 2026-10-31 |
 | prefill, 151k prompt | 288-293 t/s (dense 224) | TP2, sparse prefill, 2026-10-24 |
 | single card | decode ~46 short / ~34 at 100k / ~30 at 245k | 2026-10-21 (before the sparse re-tune) |
 
@@ -161,7 +160,7 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 | Tensor-parallel decode + prefill on two GPUs (TP2) | production | features/tensor-parallel-two-gpus.md |
 | MTP speculative decoding (draft head on the helper GPU) | production (serve_prod / boot) | features/mtp-speculative-decoding.md |
 | Sparse attention, decode + prefill | default on | features/sparse-attention.md |
-| KVarN-6 KV cache (6-bit in place, `JI_KVARN=1`) | **opt-in, not production-ready** | features/kvarn6-kv-cache.md |
+| KVarN-6 KV cache (6-bit in place, `JI_KVARN=${JI_KVARN:-1}`) | **default on (2026-10-31)** | features/kvarn6-kv-cache.md |
 | EXL3 kernels | default on | exl3-support.md |
 
 ## 9. Open work, in priority order
@@ -173,9 +172,8 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
    It supersedes prior items below. Current items continue (or in parallel where independent).
 
 1. **KVarN-6: prefill from scratch beyond ~64k is wrong - FIXED (2026-10-31, engine cd30f03)**: 98k 0.0304 → 0.00141, 130k 0.118 → 0.00136 (new `JI_KVR_META_DEFER=1` defers sparse page metadata rebuild to the first sparse decode step, fixing stale kv-head-1 rows on TP2 mid-prefill). See engineering-log 2026-10-31 "KVarN-6 from-scratch defect found and fixed" and features/kvarn6-kv-cache.md.
-2. **KVarN-6 decode at 200k is slower**: 25.1 / 27.4 t/s vs q8 32.4 (VRAM spill ruled out after the ring fix).
-   Next: `JI_PROFILE_GPU=1` at 200k, compare `attn_kvr6q` + `attn_kvr6` vs `attn_hm`.
-3. Then KVarN K6V5 / K6V4 asymmetric variants (user-approved), end-to-end gate, make it default if it wins.
+2. **KVarN-6 decode at 200k is slower - FIXED (2026-10-31, engine bae3129)**: sparse page metadata lookup was O(n) linear scan; binary search on sorted page list cut `attn_kvr6` from 4291 µs to 2530 µs. Production 200k decode 27.9 → 34.5 t/s (vs q8 33.1). KVarN now default-on via `serve_boot.sh`. See engineering-log 2026-10-31 "KVarN-6 sparse decode 2.3× faster".
+3. Next: KVarN K6V5 / K6V4 asymmetric variants (user-approved) for more context per GB on dense models; end-to-end gate, make default if it wins.
 4. **Stability**: S10 TP2 prefill soak (`JI_PF_XQ=0` to separate a sync race from hardware); after the PSU swap:
    145 W re-verify, the power-off question, SSD adapter.
 5. **MVP hardening**: full API suite (needs pip permission), single-card release config, graph-path KV-loss root

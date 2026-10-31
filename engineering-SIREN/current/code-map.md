@@ -200,7 +200,7 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 | `JI_SPF_SEL` | 1 | prefill ranking by estimated log-mass |
 | `JI_SPF_LOCAL`, `JI_SPF_DENSE_TAIL` | 4096, 4096 | prefill local window; the prompt's last N positions dense |
 | `JI_CKPT_SPLIT_MIN` | 2048 | llama-server: min tokens after the last checkpoint before it allows a split there (0 = old behavior: split at every context checkpoint, e.g. at user message start in chat) |
-| `JI_KVARN` | 0 | KVarN-6 KV cache (opt-in; see features/kvarn6-kv-cache.md) |
+| `JI_KVARN` | 1 (default on since 2026-10-31) | KVarN-6 KV cache (serve_boot.sh: `JI_KVARN=${JI_KVARN:-1}`); see features/kvarn6-kv-cache.md |
 | `JI_KVARN_RING` | 12544 | KVarN exact window ring, cells per head |
 | `JI_KVR_TAIL` | 1 | put the rings in the KV tensors' unused tail (0 = own buffers, costs 130 MiB VRAM) |
 | `JI_KVR_ITERS` | 16 | KVarN seal: balancing iterations per tile |
@@ -214,6 +214,8 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 | `JI_PF_XQ` | 1 | TP prefill exchange on its own queue (0 = copies inline; S10 soak) |
 | `JI_PF_UDMA` | 0 | **do not use** (hard-locked the box 2026-10-22) |
 | `JI_ATTN_TEST`, `JI_ATTN_KVR2`, `JI_TP_TEST` | 0 | kernel self-tests (diag) |
+| `JI_ATTN_SP` | 0 | sparse attention test: number of pages to select in `jde_attn_test_kvr2` (used with `JI_ATTN_KVR2=1` for isolated benchmark) |
+| `JI_ATTN_SP_RUN` | 0 | sparse attention test: run length (number of cells processed in one kernel call); if 0, defaults to full context |
 | `JI_KV_DUMP*`, `JI_ROUTE_DUMP` | unset | debug dumps |
 | `JI_X3_FOLD` | 2 | mul1 decode variant: 0 exact (bit-identical), 1 centred byte sum, 2 raw affine fold (x3_mv decode only) |
 | `JI_EXL3_CHECK` | unset | debug: load a checkpoint directory and oracle GGUF in parallel, compare every tensor (bytes and metadata keys), exit with results |

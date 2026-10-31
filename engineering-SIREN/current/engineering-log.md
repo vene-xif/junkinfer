@@ -2057,3 +2057,46 @@ Step 7 partly done (narrow tiles).
 
 **Reference for comparison:** user data on RTX 3090 (hyperqwen vLLM fork): Qwen3.8 27B ~100 t/s decode, ~1500 t/s prefill. Decode ratio ~3.4× matches throughput expectations (3090 ~1300 Gdecode/s TP2 expert cache hits vs RX 580 ~290 Gdecode/s, similar expert miss rate / PCIe); prefill gap is tensor cores (3090 TFLOP / 100 W vs RX 580 FMA-only at the same power).
 
+## 2026-10-31 — KVarN-6 sparse decode 2.3× faster; KVarN on by default (engine bae3129, docs repo 34f3db5)
+
+### Summary
+
+Sparse page metadata rebuild in `attn_kvr6` was expensive (3136-6272 global reads per workgroup on 200704 cells, 3136 of 6272 pages selected). Binary search of the sorted page list cut the kernel from 4291 µs to 2530 µs (q8 `attn_hm` baseline 2306 µs). Production decode at 200k depth: 27.9 → 34.5 t/s (q8 baseline 33.1 t/s). KVarN is now default-on via `serve_boot.sh` (environment `JI_KVARN=${JI_KVARN:-1}`); production restarted and smoke tests pass.
+
+### Findings (isolated benchmark: jde.cpp `jde_attn_test_kvr2`)
+
+**Setup:** Single RX 580, 200704 cells, Qwen3.6, TP2, synthetic sorted page selection (3136 of 6272 pages), test knobs `JI_ATTN_TEST=<cells> JI_ATTN_KVR2=1 JI_ATTN_SP=<pages> JI_ATTN_SP_RUN=<run_length>`.
+
+| variant | time |
+|---------|------|
+| dense `attn_hm` (q8_0) | 2306 µs |
+| sparse `attn_kvr6` (before) | 4291 µs |
+| per-page linear scan to find selected pages below S | 3136 read, 6272 checked |
+| binary search instead | 2530 µs |
+| no per-key page lookup in the PV loop | 4240 µs |
+| chunk page list in LDS | 4015 µs |
+| **arithmetic not the cost** (profiled: no QK 3724, no PV 3995) | — |
+
+**Root cause:** Each workgroup counted selected pages by linear scan of the entire page list (3136-6272 global reads per workgroup for the PV loop structure); the scan dominated the per-key math. Binary search (the page list is always sorted by `attn_topk`) cut that to ~14 reads per page (log₂ 6272), making the kernel speed-competitive with dense.
+
+**Quality (RMS error vs q8_0, unchanged):** 0.0277 (unaffected by the optimization; the algorithm is the same).
+
+### Production results (TP2, 100 W cap, sparse attention defaults, >= 1024 tokens)
+
+**Decode at 200k (JI_KVR_META_DEFER=1 from the prior fix):**
+- q8_0 `attn_hm`: 33.1 t/s (baseline)
+- KVarN-6: 27.9 t/s (before) → **34.5 t/s** (after sparse optimization, **+23.7 %**)
+
+**Full-depth end-to-end (Sage TP2, native EXL3, MTP p-min 0.8, TP2 with one-card TP helper):**
+- 1k prefill (244 → 307 t/s); decode short 54.3 → 50.5 t/s (MTP variance at temperature 0.7; no sealing below 8192)
+- 8k prefill (568 → 578 t/s); decode 47.0 → 49.7 t/s
+- 32k prefill (447 → 443 t/s); decode 42.7 → 43.4 t/s
+- Chat turns equivalent; `conv_switch_test.py` ALL PASS
+
+**Default status:** `serve_boot.sh` now exports `JI_KVARN=${JI_KVARN:-1}`. Production restarted 2026-10-31 with this default; smoke_api.py ALL PASS (1k + 1k tokens, prefill 537 t/s). Quality: 130k from scratch KL 0.00136 (q8 0.00123, both sparse defaults), restored 0.00074-0.00121.
+
+### Open KVarN items
+
+1. **K6V5 / K6V4 asymmetric variants** (user-approved): expected ~3.5 % more context per GB for dense 27B models (KVarN budget moves from K=6 to V=4 or vice versa; requires separate decode paths and axis transforms).
+2. **Optional: sparse decode LS page-list cache in `attn_hm` (q8):** page metadata rebuild in sparse attention consumes work also in q8 (3-4 % of prefill); the same LDS cache technique may give a few percent.
+

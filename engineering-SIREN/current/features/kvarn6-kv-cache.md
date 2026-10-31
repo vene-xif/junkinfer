@@ -1,8 +1,8 @@
 # KVarN-6 KV cache (in place)
 
-Status: **opt-in (`JI_KVARN=1`), quality gate pending**. Engine: 356031b68 (simulation), 21a180646 (`attn_kvr6`),
-ac2eed747 (integration), plus 2026-10-23 fixes (rings at init, state-hook view tensors, attach before state load).
-History: engineering log 2026-10-18 (late night), 2026-10-23, 2026-10-31 (from-scratch defect confirmed through the JDE prefill: 130k KL 0.118).
+Status: **default on (`JI_KVARN=${JI_KVARN:-1}`), production since 2026-10-31**. Engine: 356031b68 (simulation), 21a180646 (`attn_kvr6`),
+ac2eed747 (integration), plus 2026-10-23 fixes (rings at init, state-hook view tensors, attach before state load), plus 2026-10-31 sparse decode optimization (bae3129) and default-on setting.
+History: engineering log 2026-10-18 (late night), 2026-10-23, 2026-10-31 (from-scratch defect fixed, sparse decode 2.3× faster).
 
 ## What it is
 
@@ -113,6 +113,19 @@ KL gate (`kl.sh L_code 0 JI_TP=2 JI_KVARN=1`, vs our full-attention q8_0 referen
 **Earlier concern:** 130k from-scratch prefill scored KL 0.27 in the harness. Root cause: the KL harness (`~/jt/kl_v2.sh`) never set `JI_JPF=1`, so all prefills used the ggml graph-path engine, which does not build KVarN records or the window ring. A saved state from graph-path prefill had buffer corruption (rel. error 1.000 everywhere), while the tail through decode matched q8_0 to digit; the high KL was thus meaningless.
 
 **Resolution (job88, engine cd30f03, 2026-10-31):** the defect was real: TP2, default sparse, 130k from scratch through the JDE prefill: q8_0 KL 0.00123, KVarN **0.118** (top1 0.906). Root cause: after each JDE prefill ubatch the KVarN path rebuilt sparse page metadata from the window ring, but on TP2 kv-head-1 rows are pulled back from the helper only inside the seal, so the rebuild happened on stale rows. Fix: new `JI_KVR_META_DEFER` (default 1) defers metadata rebuild to the first sparse decode step (matching semantics after state restore, where all pages are initially dirty). **Results:** 98k KVarN 0.0304 → 0.00141 (top1 0.9746 → 0.9951), 130k 0.118 → 0.00136 (0.906 → 0.990). 32k and all restored-state decodes were correct before and after the fix.
+
+## Sparse decode speed (2026-10-31)
+
+**Problem.** `attn_kvr6` on sparse pages was slow (4291 µs at 200704 cells, 3136 of 6272 pages selected), 86 % slower than the q8_0 `attn_hm` dense baseline (2306 µs). Profiling showed the kernel spent time counting pages: each workgroup scanned the entire page list (3136–6272 global reads) to find which pages were selected.
+
+**Fix (engine bae3129).** The page list is always sorted (by `attn_topk` descending mass). Replace the linear scan with binary search: ~14 reads per page instead of 6272. `attn_kvr6` time: 4291 → 2530 µs (q8 2306, KVarN now faster per *arithmetic*, not bandwidth).
+
+**Production results (TP2, 100 W, 200k depth):**
+- q8_0 `attn_hm`: 33.1 t/s
+- KVarN-6 before: 27.9 t/s (−15.8 %)
+- KVarN-6 after: **34.5 t/s (+23.7 %, beats q8 by +4.2 %)** (encoding saves VRAM; decodes faster when warm)
+
+**Quality.** Unchanged (RMS error vs q8_0: 0.0277). The algorithm is the same; only the page lookup optimized.
 
 ## Porting notes
 

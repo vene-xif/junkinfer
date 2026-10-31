@@ -18,23 +18,21 @@ Targets (dev box AUX-1; see README for the table):
 Handoff for the next engineer / agent: `../../HANDOFF.md` (access, rules, workflow, open work in order).
 
 - **Production:** boot service `junkinfer.service` on AUX-1 (`scripts/serve_boot.sh`): LAN `0.0.0.0:8080`, two cards
-  -> TP2 decode + two-card JDE prefill + MTP (one card -> single-card JDE), q8_0 KV, 262k context, sparse attention,
+  -> TP2 decode + two-card JDE prefill + MTP (one card -> single-card JDE), **KVarN-6 KV default-on**, 262k context, sparse attention,
   Qwen-Sharp chat template, thinking on, auto-restart. `ji-thermal-guard.service` logs GPU temperatures. Verified
-  across two reboots; `smoke_api.py` ALL PASS (2026-10-31). Engine 479f8ab + f89ed0e, project +edits.
+  across two reboots; `smoke_api.py` ALL PASS (2026-10-31). Engine 479f8ab + f89ed0e + bae3129, project +edits.
 - **Served model: Sage-A1.5** (native EXL3 checkpoint directory, no conversion, own MTP head): TP2, MTP p-min 0.8,
   decode 47.4 / 62.8 / 55.3 t/s (rewrite / story / explain), prefill 537 t/s (6.8k); Qwen3.6 TP2 + MTP sidecar:
   53.9 / 64.6 / 58.8. Sage TP2 no MTP: 46.4 / 55.1 / 49.7 (earlier in this date, mul1 decode optimizations). Details HANDOFF.md §2.
-- **Speed (100 W cap, >= 1024 tokens):** decode short 53.9 / 64.6 / 58.8 t/s (TP2 + MTP, 2026-10-31), 200k 32.4 (no MTP);
+- **Speed (100 W cap, >= 1024 tokens):** decode short 53.9 / 64.6 / 58.8 t/s (TP2 + MTP Sage, 2026-10-31), 200k 34.5 t/s (KVarN, vs q8 33.1);
   prefill ~550 t/s (7k), 288-293 t/s (151k). Targets not met: decode 80, prefill 1000 / 500.
-- **Quality:** sparse end to end KL 0.00125 (130k) / 0.00165 (261k) vs full attention (q8_0 KV itself ~0.001).
-- **KVarN-6 (`JI_KVARN=1`): opt-in, not production-ready.** Decode from restored states KL 0.0005-0.0011; MTP
-  short decode at q8 parity since the ring-in-tail fix (4f5d347ee: 32.9 / 34.1 / 34.5 -> 50.6 / 60.8 / 55.3 t/s).
-  Open: prefill from scratch > 64k wrong (130k KL 0.27), decode at 200k 25-27 vs 32.4 t/s.
+- **Quality:** sparse end to end KL 0.00125 (130k) / 0.00165 (261k) vs full attention (q8_0 KV itself ~0.001). KVarN: 0.00136 (130k from scratch, 2026-10-31).
+- **KVarN-6 (`JI_KVARN=${JI_KVARN:-1}`): default-on since 2026-10-31.** Decode from restored states KL 0.0005-0.0011; production 200k 27.9 → 34.5 t/s (sparse decode optimization: binary search for page lookup). From-scratch 130k fixed (cd30f03): was 0.118, now 0.00136. Open: K6V5 / K6V4 asymmetric variants for denser 27B models.
 - **Hardware:** two power-offs without log entries under two-card load (2026-10-24, 2026-10-25), not thermal
   (GPUs <= 70 C): power delivery suspected. GPU power cap 100 W permanent (user decision 2026-10-30). TP2 prefill ring hang S10 open.
 - **TOP PRIORITY (user, 2026-10-26): native EXL3** (no conversion; keep MTP + vision; fast mul1):
   `native-exl3-plan.md`.
-- **Plan (user-decided order, 2026-10-30):** 0. (native EXL3, referenced in TOP PRIORITY above; continues after / alongside all 11 steps below) 1. ~~Fast mul1 decode (open-paths #7)~~ DONE 2026-10-31 (engine d44ea8d): Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9). 2. Native EXL3 loader (plan steps 1-3); 3. Sage's own MTP head; 4. MTP verify-step anomaly (2-token step cost); 5. Prefill: two-card time breakdown + balance fix; 6. EXL3 GEMM rewrite for energy per FMA; 7. Short-prompt prefill (stop re-streaming cached experts); 8. KVarN-6 fixes (prefill > 64k, decode at 200k); 9. Sparse-attention track (micro-blocks M1-M2 first); 10. Vision.
+- **Plan (user-decided order, 2026-10-30):** 0. (native EXL3, referenced in TOP PRIORITY above; continues after / alongside all steps below) 1. ~~Fast mul1 decode~~ DONE 2026-10-31 (d44ea8d). 2. ~~Native EXL3 loader~~ DONE (479f8ab). 3. ~~Sage's own MTP head~~ DONE (f89ed0e). 4. ~~MTP verify-step anomaly~~ DONE. 5. ~~Prefill breakdown~~ DONE. 6. ~~EXL3 GEMM rewrite (narrow tiles)~~ PARTLY DONE (f0dcb49). 7. ~~Short-prompt prefill~~ DONE (14eb6fe, f519a49). 8. ~~KVarN-6 fixes~~ DONE (cd30f03 from-scratch, bae3129 sparse decode 2.3×). 9. Sparse-attention track (micro-blocks M1-M2 first); 10. Vision. 11. K6V5 / K6V4 asymmetric variants.
 
 ## Where we are (2026-10-19) — SUPERSEDED 2026-10-26 (see above)
 
