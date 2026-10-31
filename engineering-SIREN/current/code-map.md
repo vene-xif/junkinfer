@@ -198,6 +198,7 @@ diagnostics). The production values are set by `scripts/serve.sh` / `serve_prod.
 | `JI_SPARSE_PF_FRAC` | 0.5 | prefill budget = max(JI_SPARSE_PF, FRAC x keys) |
 | `JI_SPF_SEL` | 1 | prefill ranking by estimated log-mass |
 | `JI_SPF_LOCAL`, `JI_SPF_DENSE_TAIL` | 4096, 4096 | prefill local window; the prompt's last N positions dense |
+| `JI_CKPT_SPLIT_MIN` | 2048 | llama-server: min tokens after the last checkpoint before it allows a split there (0 = old behavior: split at every context checkpoint, e.g. at user message start in chat) |
 | `JI_KVARN` | 0 | KVarN-6 KV cache (opt-in; see features/kvarn6-kv-cache.md) |
 | `JI_KVARN_RING` | 12544 | KVarN exact window ring, cells per head |
 | `JI_KVR_TAIL` | 1 | put the rings in the KV tensors' unused tail (0 = own buffers, costs 130 MiB VRAM) |

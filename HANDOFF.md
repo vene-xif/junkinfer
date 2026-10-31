@@ -30,10 +30,13 @@ zero context and >= 500 t/s at 262k; quality not below EXL3 3.5 bpw weights and 
   sparse attention on, thinking on, **Qwen-Sharp chat template** (`ref/templates/qwen_sharp.jinja`).
 - Restarts on exit. Verified across two reboots on 2026-10-31: server, thermal guard, fan curve, governor all up.
   `scripts/smoke_api.py`: ALL PASS (chat, tool-call parsing, prefix cache 6839 -> 23 tokens, prefill 537 t/s).
+- **Short-prompt prefill fixed (engine 14eb6fe, f519a49):** llama-server was splitting every chat prompt at the start of the last user message,
+  running two-batch prefills for short prompts (~1-2 s overhead). New `JI_CKPT_SPLIT_MIN` (default 2048) prevents checkpoint
+  splits unless at least that many tokens lie after the checkpoint. Multi-turn cache reuse unchanged (verified: depth-kv tests ALL PASS).
 
 **Sage-A1.5 (boot default, 2026-10-31):** Native EXL3 checkpoint directory `/mnt/ssd/models/Sage-A1.5-exl3-4.0bpw`
 (no GGUF conversion). TP2, **own MTP head** (p-min 0.8), Qwen-Sharp template, alias `sage-a1.5`. Decode rewrite / story /
-explain 47.4 / 62.8 / 55.3 t/s; prefill 537 t/s (6.8k); smoke_api ALL PASS. MTP acceptance 87 / 95 / 91 %. Load ~250 s
+explain 47.4 / 62.8 / 55.3 t/s; prefill 537 t/s (6.8k, batch 1); smoke_api ALL PASS. MTP acceptance 87 / 95 / 91 %. Load ~250 s
 (native 143 s + MTP re-quant 107 s). vs 2026-10-26 (39.6 / 45.0 / 41.7, no MTP): **+22 / +41 / +36 %**. Sage's own MTP
 head (IQ4_NL, Q5_K, Q6_K): outputs identical at every p-min (lossless); Qwen3.6 sidecar on Sage gives no gain (64/88/85 %).
 
@@ -166,7 +169,7 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 0. **TOP PRIORITY (user, 2026-10-26): native EXL3 — load exllamav3 checkpoints without conversion, keep their MTP
    layer and vision tower, make the current `mul1` codebook fast.** Full step-by-step plan, pitfalls, checks and
    remaining headroom: [`engineering-SIREN/current/native-exl3-plan.md`](engineering-SIREN/current/native-exl3-plan.md).
-   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. 2. **Fast mul1 decode [DONE 2026-10-31, engine d44ea8d]**: Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9), prefill 557 t/s (was 541). 3. **Native EXL3 loader [DONE 2026-10-31, engine 479f8ab]**: checkpoint directory loads directly, no GGUF conversion, 1475 tensors byte-identical vs oracle (ssm_a 2 ulp). 4. **Sage's own MTP head [DONE 2026-10-31, engine f89ed0e]**: IQ4_NL re-quant at load, p-min 0.8 lossless, Sage +22/+41/+36% (47.4/62.8/55.3 t/s), acceptance 87/95/91%. 5. MTP verify-step anomaly. 6. Prefill: two-card time breakdown + balance. 7. EXL3 GEMM energy rewrite. 8. Short-prompt prefill (no re-stream). 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
+   Plan order (user-decided, 2026-10-30): 1. **Post-prefill decode slowdown [DONE 2026-10-31, engine 104fa96]**: huge-page host imports; decode now within 1% of fresh after a 21.7k prefill. 2. **Fast mul1 decode [DONE 2026-10-31, engine d44ea8d]**: Sage 46.4 / 55.1 / 49.7 t/s (was 39.6 / 46.0 / 41.9), prefill 557 t/s (was 541). 3. **Native EXL3 loader [DONE 2026-10-31, engine 479f8ab]**: checkpoint directory loads directly, no GGUF conversion, 1475 tensors byte-identical vs oracle (ssm_a 2 ulp). 4. **Sage's own MTP head [DONE 2026-10-31, engine f89ed0e]**: IQ4_NL re-quant at load, p-min 0.8 lossless, Sage +22/+41/+36% (47.4/62.8/55.3 t/s), acceptance 87/95/91%. 5. **MTP verify-step anomaly [CONCLUDED 2026-10-31]**: no bug; per-step decode cost 19.7 / 35.8 / 45.7 ms for 1 / 2 / 3 tokens is MoE-bound (each token routes to mostly different experts). 6. **Prefill two-card breakdown and balance [CONCLUDED 2026-10-31]**: no cheap win; helper GPU busy 99.7 %, primary waits ~0.9 s per 4k-token batch; mixer all-reduce over the helper's PCIe 2.0 x4 is the limiter (6.4 s vs 5.0 s on the primary). Cards equal in ALU (292 vs 293 Gdecode/s). 7. **EXL3 GEMM energy rewrite**: small-tile expert GEMMs are latency-bound (~30 % of FMA peak), not power-bound; routed-expert GEMMs cost ~600 ms fixed + ~0.37 ms/token/batch. Main target. 8. **Short-prompt prefill (no re-stream) [DONE 2026-10-31, engine 14eb6fe, f519a49]**: llama-server was splitting chat prompts at the last user message start; fixed with new `JI_CKPT_SPLIT_MIN` (default 2048). Prefill t/s: 1159 tokens 208 -> 420, first chat turn 5564 -> 4898 ms. Decode unchanged. 9. KVarN-6 fixes. 10. Sparse-attention track. 11. Vision.
    It supersedes prior items below. Current items continue (or in parallel where independent).
 
 1. **KVarN-6: prefill from scratch beyond ~64k is wrong** (130k: KL 0.27 single card, 0.118 TP2; 32k 0.00085 and
@@ -211,6 +214,8 @@ If VENE is unreachable: both repos also have an `aux` remote (bare repos on AUX-
 - On amdgpu, every host buffer imported into a GPU (userptr) costs page-walk time on every submit; use huge pages
   for imports and keep them few (2026-10-31: prefill exchange buffer 134 MiB = 33k 4 KB pages = 23 ms of kernel
   overhead per submit; 2 MiB alignment + MADV_HUGEPAGE + pre-fault cuts that to 0.1 ms).
+- A per-batch fixed cost is not necessarily transfer: measure the kernel (JI_PF_VRAMX removed the PCIe upload for 15 % of
+  experts and changed nothing).
 
 ## 11. Document map
 

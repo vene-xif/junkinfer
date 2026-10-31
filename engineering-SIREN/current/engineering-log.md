@@ -1892,3 +1892,46 @@ every submit; use huge pages for imports and keep them few.
 - Load time: cache the MTP re-quantization or run JDE's draft directly on EXL3 (removes the re-quant step).
 - Vision: checkpoint's vision tower not yet loaded (plan step 5).
 - KL reference for Sage: should be re-made from the native load.
+
+## 2026-10-31 — Plan steps 5, 6, 8: MTP verify-step, prefill breakdown, short-prompt prefill
+
+### Plan step 5: MTP verify-step anomaly (CONCLUDED)
+
+**Findings:** Per-step decode cost 19.7 / 35.8 / 45.7 ms for 1 / 2 / 3 tokens/step, not linear. Measured with `JI_PROFILE`: decode cost grows as `M + N*T` where M is fixed overhead, N is per-token cost per step, T is tokens. The 1 -> 2 token gain is sublinear (81 % of 1x cost, not 50 %) and 2 -> 3 even worse (128 % of 2x, i.e. +26 ms for the 3rd token). **Root cause: MoE routing.** Each extra token routes to mostly different experts (hit rate baseline: 93 %; step 1: all new, 0 %; step 2: 24 % match step 1; step 3: 19 % match prior 2). This is architecture-specific (Sage / Qwen3.6, 256 experts, 8 active). No defect detected. Step 5 closed.
+
+### Plan step 6: Prefill two-card breakdown and balance (CONCLUDED)
+
+**Problem statement:** Prefill throughput plateaus at ~540 t/s (two cards) vs target 1000 t/s at zero context. Find the bottleneck and check for a cheap fix (e.g., rebalance experts between cards).
+
+**Measurements** (TP2 JDE prefill, 100 W per GPU; engine states before plan step 8 fix):
+- Helper GPU in 4k-token batches: busy 99.7 %, primary waits ~0.9 s per batch (92 % idle).
+- Time breakdown: rank 0 prefill 4.1 s, rank 1 prefill 3.2 s, all-reduce mixer: rank 0 5.0 s, rank 1 6.4 s. Primary does the mixer ~1.4 s faster.
+- The helper's mixer (6.4 s) is slow because it exchanges 134 MiB over PCIe 2.0 x4 (bandwidth ~1.2 GB/s effective in the all-reduce pattern; transfer time 2 * 134 / 1.2 = 223 ms baseline, but the actual time is 6.4 s with synchronisation overhead and latency).
+- GPU ALU capacity: rank 0 decode matmul/minute 292 Gdecode/s at 1360 MHz clocks; rank 1 293 Gdecode/s at 1319 MHz. Both equal.
+- Expert distribution: rank 0 holds 7971 / 10240 (78 %) of experts by count; helper can only compute experts it holds in VRAM. This is by design (TP2 strategy: primary computes more, helper less).
+- Tried: `JI_TP_FRAC 0.6` (more experts to helper): prefill 500 vs 492 t/s, decode lower. Kept 0.7.
+
+**Conclusion:** No cheap win. The helper is compute-bound on the experts it holds; the PCIe link limits the all-reduce. Primary has spare compute but waits for helper's mixer. To improve: (a) dedicate the helper to MTP + cache, not prefill compute (plan step 7+); (b) faster all-reduce (not feasible on PCIe x4); (c) reduce the prefill granularity (lower per-step cost); (d) single-card prefill at the cost of helper GPU idle. Step 6 closed.
+
+### Plan step 8: Short-prompt prefill (DONE, engine 14eb6fe + f519a49)
+
+**Problem.** Chat prompts (e.g., "hi") prefill at only ~200 t/s vs ~540 t/s for large batches. Impact: first turn in a fresh conversation 5-6 seconds, degrading user experience.
+
+**Root cause:** llama-server splits every chat prompt at the start of the last user message (to save a context checkpoint there for edits), so a 1459-token first turn ran as two JDE prefill batches: ~200 tokens + ~1259 tokens. Each batch costs a fixed ~0.98 s plus ~1.2 ms/token (routed-expert GEMMs bottleneck); the split adds 0.98 s extra.
+
+**Fix:** New environment variable `JI_CKPT_SPLIT_MIN` (default 2048, tunable in `/etc/junkinfer.env` or server). In `tools/server/server-context.cpp`, the server now skips the context-checkpoint split at a user-message start unless at least `JI_CKPT_SPLIT_MIN` tokens lie after the last checkpoint (or the prompt start). This preserves cache reuse: multi-turn checkpoints are at ~4 tokens before the prompt end (for regeneration), so a turn 2 reply still restores from the right checkpoint (verified: `scripts/conv_switch_test.py` cache_n 1455, ALL PASS).
+
+**Profiling detail** (measured with `JI_PF_GPROF`, Sage native, TP2 100 W): rank 0's routed-expert GEMMs (pf_mm_id / pf_mm_id32) cost ~600 ms fixed + ~0.37 ms per token per batch. At 980 tokens, 953 ms (expected 1191 ms at 0.37 ms/token + 600 fixed; actual lower likely due to non-linearity in cache locality). This kernel achieves ~30 % of FMA peak on 32-column expert tiles (~30 tokens/expert) and ~57 % on full 64-column tiles. The latency-bound stall is the main target for plan step 7 (GEMM rewrite for energy).
+
+**Other tried and dropped:** `JI_PF_VRAMX` (staging decode-cached experts device-local on rank 0). On a cached chat turn 3690 of 23913 expert tensors came from VRAM, prefill time unchanged (2595 vs 2629 ms). The upload is not the limiter.
+
+**Results** (Sage TP2, JI_CKPT_SPLIT_MIN default 2048, engine 14eb6fe -> f519a49):
+- 1159-token prompt: prefill t/s 208 (512 threshold) -> 272 (512 limit) -> 420 (2048 threshold). Two batches shrink to one.
+- 2184 tokens: 416 -> 539 -> 532 t/s (same number of batches; 512 and 2048 thresholds both allow single batch).
+- 4081 tokens: 512 -> 604 t/s (one batch at all thresholds).
+- First fresh chat turn 1459 tokens: wall time 5564 ms -> 4898 ms (-12 %, one batch instead of two).
+- Decode unchanged: 52.8 / 50.4 t/s at 1k / 2k context (1024-token gens).
+- `scripts/conv_switch_test.py` (multi-turn switching, KV restore): ALL PASS. Qwen3.6 TP2 + MTP verified.
+- `scripts/smoke_api.py` (chat, prefix-cache reuse, tool calls): ALL PASS, prefill 537 t/s on 6.8k.
+
+Step 8 closed.
