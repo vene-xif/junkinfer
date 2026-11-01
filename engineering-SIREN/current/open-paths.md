@@ -36,7 +36,8 @@ on the primary no longer shortens steps much (learned eviction bound: engineerin
 | D6 | Rebalance cards after write-through (JI_TP_FRAC / hot-set size sweep) | 16.7 vs 16.0 ms | +1-3 % | low (config) |
 | D8 | **Host work per step** (perf of the decoding thread, 2026-11-01: ~3 ms CPU per step): sampler over the full 248k vocabulary twice per step (copy + top-k partial sort, ~1 ms) -> top-k prefilter (JI_SAMPLER_PREFILTER); llama_kv_cache::seq_rm scanning all 262144 cells per rollback (~0.4 ms) -> used range only; MTP draft CPU part 0.26 ms; expert-cache bookkeeping ~0.2 ms | ~1.5 ms/step | in test |
 | D9 | Router latency hidden behind the shared expert's input stages (JI_OVL_ROUTER, runtime switch); f16 router copies done (38.4 -> 33.5 us/call) | up to ~1 ms/step | in test |
-| D7 | Re-test 2 MTP drafts/step after D1-D2 (2.37 vs 1.95 tokens/step; lost to fixed per-step cost so far) | fixed step cost | +5-10 % conditional | low |
+| D10 | Sparse-attention page selection cost at 100k+ (attn_score / attn_topk per layer); if material, IndexCache-style cross-layer reuse of the selection (lossy: KL-gated) | unknown at depth | measure first |
+| D7 | ~~Re-test 2 MTP drafts/step~~ DONE 2026-11-01: 2 drafts default (JI_MTP_NMAX 2, runtime cap JI_MTP_NMAX_RT): 59.60 -> 62.92 t/s in-instance (2.37 vs 1.95 tokens/step; lost to fixed per-step cost so far) | fixed step cost | +5-10 % conditional | low |
 
 Together D1-D5 as estimated: ~26 -> ~21 ms per step, ~+20-25 % (~70 t/s short). Also: AUX1 hard freeze
 2026-11-01 09:23 during heavy server-restart churn - check reproducibility before stress runs; prefer A/Bs inside

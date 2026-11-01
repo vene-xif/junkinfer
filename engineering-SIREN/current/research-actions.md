@@ -175,3 +175,18 @@ Reported for Qwen3.8-Flash-Next (the "Qwen4 preview") and expected in Qwen4:
 | Flex / Morph prefill-gated layer selection | needs gate training |
 
 Its step-time table (107-154 t/s) is an idealised model (8 ms of trellis compute for 3.2B weights over two cards, 25 us syncs) that does not match the measured 23 ms GPU + ~2.5 ms host per 2-token step.
+
+## Report E (2026-11-01, "Training-free and calibration-only optimizations for trellis-quantized hybrid GDN-MoE") - checked
+
+| idea | status here |
+|---|---|
+| Rollback-free GDN verify (KVBuffer, Trees from Marginals) | speculative rollback already free here (spec_prof: ckpt 0.00 ms/step) |
+| Trimmed MTP draft head (Tandem 32k rows) | done (HyperQwen 40,960-row profiled vocabulary) |
+| EVICT / EcoSpec draft pruning | ~ our p-min gated 2-token chain (JI_MTP_NMAX_RT 2, p-min 0.8) |
+| One output Hadamard for shared + 8 routed experts | not exact for EXL3: svh is applied after the output Hadamard (per expert); Hadamard is ~7 ops/output vs 2048 weight decodes anyway |
+| Column-shared trellis decode in verify (Tandem) | done (x3_mv NT 2-4) |
+| DASC / Tail-Replay prefix state compression | lossy; server context checkpoints already make prefix reuse cheap |
+| Banded Neumann (I-A)^-1 for GDN chunked prefill | GDN recurrence ~5 % of prefill (GEMMs 85 %): <= ~3 % |
+| IndexCache: cross-layer reuse of sparse-attention selections | only candidate: per-layer page scoring + top-k ~4 us/layer at short context; measure at 100k+ before a KL test (open-paths D10) |
+| DeltaLog / PACE deferred state | loses at batch 1 (report's own caveat) |
+| Routed-expert output reuse across tokens (VITRIOL / BASE) | lossy; low routing consistency with a shared expert (report's own data) |
