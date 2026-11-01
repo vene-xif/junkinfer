@@ -56,6 +56,22 @@ Split (7.2k, 2026-10-20): dense EXL3 GEMM 43 %, MoE GEMM 42 %, flash attention 1
 | P7 | v_sad_u8 (side Mesa; research-actions #5) - fewer ops per weight in the GEMM decode stage too | a few % | 2-3 days + Mesa build |
 | - | Hardware (not software): x8/x8 lanes for card B, est. +15-20 % two-card prefill; >100 W is excluded by the user | - | - |
 
+### Research bets (2026-11-01; user: #R1 in scope; no re-quantization at this stage)
+
+Already well known / reproduced elsewhere and earlier discarded by the user: training-free expert skipping (ACE,
+"halving activated experts") and batch-aware routing (SERE, Opportunistic Expert Activation) - STRATA already does
+both, crib notes from it if tried; SpecPrefill-style prompt-token dropping - rejected (never makes sense here).
+
+| # | idea | why it could change the shape of the system | first de-risking step |
+|---|---|---|---|
+| R1 | **Speculative layer pipeline instead of tensor parallel**: card A layers 0-19, card B 20-39, kept busy by MTP-drafted tokens in flight (SpecPipe / PipeSpec, arXiv 2504.04104 / 2505.01572 - dense models with separate drafts; nothing found for MoE + built-in MTP on asymmetric consumer links) | ~80 card syncs per step -> one 8 KB hidden-state handoff per token over the x4 link; each card owns its 20 layers' experts (~7.5 GB: near all-resident: placement / misses / write-through mostly moot); host sampling + drafting overlap the GPUs. Est. +20-40 % decode at ~80 % pipeline efficiency (guess). Hard parts: 2-deep drafts (chained MTP), flush + DeltaNet / KV rollback on rejects | measure chained 2-deep MTP acceptance on Sage; time a 20-layer stage on one card |
+| R2 | **Co-schedule complementary work on one card**: token t's expert mat-vecs (trellis ALU-bound) concurrent with token t+1's attention (KV-bandwidth-bound) on two queues (needs R1's tokens in flight) | at 116k attention is most of the 58 -> 40 t/s drop; overlapping it with ALU-bound work could hide much of it | lab microbench: x3_mv_moe + attn kernels concurrently on two queues vs back to back on gfx803 |
+| R3 | **Pipelined prefill** (R1's layer split for prefill): one ~16 MB handoff per 4096-token chunk instead of per-layer exchanges over card B's PCIe 2.0 x4; each card needs mainly its own layers' experts (resident -> little per-chunk upload) | removes the exchange and most expert uploads; power-cap caveat: only work / energy reductions count | after R1; estimate upload + exchange energy share first |
+| R4 | **Free deep drafts for the pipeline**: suffix-tree / retrieval drafting from prompt + previous turns + own output ("Draft Less, Retrieve More", arXiv 2605.20104), MTP for the first draft token | R1 needs >= 2-deep drafts where MTP is weakest; code / edits / tool output are where retrieval hits | n-gram spec measured 37 -> 50 t/s on a code rewrite earlier: re-measure on current engine |
+| R5 | **MTP draft head on the CPU** (40k-vocab head, small) | its ~1.35 ms/step leaves the GPU critical path; counts fully in a pipeline | time the head on the Ryzen (AVX2) |
+| R6 | Fallback if R1 disappoints: **duplicate the token mixer on both cards** (DeltaNet / attention computed fully on each) | halves the per-layer syncs (~80 -> ~40) at the cost of duplicated mixer work | measure mixer share of per-card time |
+| R7 | (needs re-quantization - later) nested-precision experts (2-bit base + 2-bit residual trellis; precision per token by router weight); gfx8-cheap trellis codes (cf. Proteus, ICML 2026) | halves ALU + PCIe for low-weight experts / attacks the trellis-decode ALU floor | offline CPU error study of a residual trellis on a few experts |
+
 ## Tier 0 - hours (config, env knobs, already-written code awaiting a run)
 
 | # | Path | Status | Expected gain | Cost / risk |
