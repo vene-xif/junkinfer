@@ -34,6 +34,8 @@ on the primary no longer shortens steps much (learned eviction bound: engineerin
 | D4 | Fewer tiny dispatches: x3_prep 371 x ~2.6 us per token - fuse into the producing kernel's output stage (fusing into the consumer, FUSEP, was slower) | ~1 ms/step | ~+2 % | medium |
 | D5 | Dense EXL3 mat-vec arithmetic (research-actions #4-5: integer accumulate, v_sad_u8 via side Mesa), lab-benched first | dense x3_mv ~6 ms/step | +2-5 % if it works | medium, uncertain |
 | D6 | Rebalance cards after write-through (JI_TP_FRAC / hot-set size sweep) | 16.7 vs 16.0 ms | +1-3 % | low (config) |
+| D8 | **Host work per step** (perf of the decoding thread, 2026-11-01: ~3 ms CPU per step): sampler over the full 248k vocabulary twice per step (copy + top-k partial sort, ~1 ms) -> top-k prefilter (JI_SAMPLER_PREFILTER); llama_kv_cache::seq_rm scanning all 262144 cells per rollback (~0.4 ms) -> used range only; MTP draft CPU part 0.26 ms; expert-cache bookkeeping ~0.2 ms | ~1.5 ms/step | in test |
+| D9 | Router latency hidden behind the shared expert's input stages (JI_OVL_ROUTER, runtime switch); f16 router copies done (38.4 -> 33.5 us/call) | up to ~1 ms/step | in test |
 | D7 | Re-test 2 MTP drafts/step after D1-D2 (2.37 vs 1.95 tokens/step; lost to fixed per-step cost so far) | fixed step cost | +5-10 % conditional | low |
 
 Together D1-D5 as estimated: ~26 -> ~21 ms per step, ~+20-25 % (~70 t/s short). Also: AUX1 hard freeze
@@ -48,9 +50,9 @@ Split (7.2k, 2026-10-20): dense EXL3 GEMM 43 %, MoE GEMM 42 %, flash attention 1
 | # | step | est. gain | effort |
 |---|---|---|---|
 | P1 | Register-decoded prefill GEMM (research-actions #6: decode each 16x16 tile once, share across a quad by DPP, B from LDS) - fewer decode ops per FMA, i.e. less energy per token | +10-20 % prefill | ~1 week |
-| P2 | Fold the mul1 affine in the prefill GEMM (research-actions #7; decode already folds, KL 0.00014) - one FMA per weight less | +3-6 % (est.) | ~1 day + KL gate |
+| P2 | ~~Fold the mul1 affine in the prefill GEMM~~ DROPPED 2026-11-01: each decoded weight is reused for 64-128 columns, so decode is ~5-10 % of the GEMM ALU and the fold saves one of ~6 decode ops (~1-2 %), lossy (KL) | ~1-2 % | - |
 | P3 | Win back the placement cost: the corpus hot set + JI_TP_DUP=0 cost prefill 2-5 %; let prefill use its own split / ownership | +2-5 % | low-medium |
-| P4 | MTP's share of prefill (item 23 measured ~10 % at long prompts): check whether prompt positions produce per-position outputs (logits / nextn rows) beyond the JI_MTP_PF_WIN window, cut what the draft head does not need | up to ~5-10 % on long prompts (verify first) | low to check |
+| P4 | ~~MTP's share of prefill~~ CLOSED 2026-11-01: the LM head already runs only for the last rows; measured MTP on / off ~10k-token prompts 527 / 528 and 539 / 542 t/s (first request after a start 480-494 vs 520: one-time warm-up) | none | - |
 | P5 | Long-context prefill attention: sparse prefill budget / 32-key sub-pages (item 17), cheaper KVarN seal | depth-dependent, larger at 100k+ | medium, KL-gated |
 | P6 | Two-card exchange over card B's PCIe 2.0 x4: smaller wire format (8-bit exchange already +3 %), overlap | +2-5 % | medium |
 | P7 | v_sad_u8 (side Mesa; research-actions #5) - fewer ops per weight in the GEMM decode stage too | a few % | 2-3 days + Mesa build |
