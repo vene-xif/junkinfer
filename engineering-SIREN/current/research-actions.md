@@ -190,3 +190,17 @@ Its step-time table (107-154 t/s) is an idealised model (8 ms of trellis compute
 | IndexCache: cross-layer reuse of sparse-attention selections | only candidate: per-layer page scoring + top-k ~4 us/layer at short context; measure at 100k+ before a KL test (open-paths D10) |
 | DeltaLog / PACE deferred state | loses at batch 1 (report's own caveat) |
 | Routed-expert output reuse across tokens (VITRIOL / BASE) | lossy; low routing consistency with a shared expert (report's own data) |
+
+## Report F (2026-11-01, "Inference-time arithmetic and energy optimization for EXL3 on dual power-capped gfx803") - checked
+
+| idea | status here | next |
+|---|---|---|
+| Undervolt (pp_od_clk_voltage, ppfeaturemask) + phase-aware DPM (claims +20-25 % prefill at 100 W, 25-45 % less J/token decode) | prefill is power-bound at the cap (memory note): lower voltage = higher sustained clock; would also cut peak board power (power-off issue) | **user decision** (system / kernel setting, reboot, stability risk on a box that already powers off) |
+| mul1 hash multiply split into two 24-bit multiplies (v_mul_u32_u24 / v_mad_u32_u24) instead of quarter-rate v_mul_lo_u32 | our decode issues one 32-bit `v * 0x83DCD12D` per weight; the split adds shifts / masks - not obviously cheaper | lab/cbdecode microbench (exact) |
+| Prefill: reconstruct trellis once to fp16 scratch, then dense GEMM (exl3xpu / vllm.cpp crossover at M > 128) | pf_mm re-decodes each tile once per 64/128-column block (~32x per 4096-token ubatch); trade: 4x VRAM weight traffic | lab/mmbench vs pf_mm (alternative to P1) |
+| Exact fp32 mul1 affine (skip the 0x6400 bitcast) | done (fold) | - |
+| Register M-tiling / SGPR activation broadcast | done (x3_mv NT 2-4); SGPR broadcast does not fit our layout | - |
+| Output Hadamard + svh after the TP all-reduce | a few ops per output: negligible | - |
+| RMSNorm gamma absorbed into suh | x3_prep already fuses the norm: negligible | - |
+| DPP / swizzle FWHT | research action #11 (low priority) | - |
+| LDS LUT / Psumbook for mul1 | rejected by the report itself (64 KB LDS, 1 weight per gather) | - |
