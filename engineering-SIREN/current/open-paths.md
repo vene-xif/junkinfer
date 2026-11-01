@@ -18,6 +18,44 @@ register-decoded prefill GEMM, sparse scorer, Qwen4 readiness) - `research-actio
 
 Legend: gain = expected, unmeasured unless stated. "KL" = added KL vs our own EXL3 4.0 bpw full-attention output.
 
+## Highest-value next steps (2026-11-01, after write-through + placement + pinning)
+
+State: Sage TP2 short decode ~58 t/s = ~23 ms GPU + ~3 ms host per step (~1.95 tokens); 116k 39.9 t/s; prefill ~530
+t/s at 10k, ~311 t/s at 116k. Card work balanced (primary 16.7 / helper 16.0 ms per step), so expert-cache work
+on the primary no longer shortens steps much (learned eviction bound: engineering-log 2026-11-01 later).
+
+### Decode (ranked by gain / effort; estimates, not measurements)
+
+| # | step | time it attacks (measured) | est. gain | effort |
+|---|---|---|---|---|
+| D1 | Host out of the step loop: MTP draft head recorded into the same GPU submission as the verify | host gap ~2.6-3 ms/step (draft ~1.35, sampling ~0.3, bookkeeping) | +5-8 % | medium-high (server / speculative step order) |
+| D2 | Cheaper card-to-card syncs: GPUs poll each other's markers over BAR instead of GPU -> host relay -> event, and/or fewer sync points (~80/step) | sync floor ~1.7-2 ms/step + per-layer imbalance | +4-7 % | medium |
+| D3 | Router kernel: 34 us per layer for a 1 MB mat-vec + top-k (target ~8-10 us; suspect the serial softmax/top-k tail); on both cards' critical path | ~1.4 ms/step | +3-4 % | low-medium, self-contained |
+| D4 | Fewer tiny dispatches: x3_prep 371 x ~2.6 us per token - fuse into the producing kernel's output stage (fusing into the consumer, FUSEP, was slower) | ~1 ms/step | ~+2 % | medium |
+| D5 | Dense EXL3 mat-vec arithmetic (research-actions #4-5: integer accumulate, v_sad_u8 via side Mesa), lab-benched first | dense x3_mv ~6 ms/step | +2-5 % if it works | medium, uncertain |
+| D6 | Rebalance cards after write-through (JI_TP_FRAC / hot-set size sweep) | 16.7 vs 16.0 ms | +1-3 % | low (config) |
+| D7 | Re-test 2 MTP drafts/step after D1-D2 (2.37 vs 1.95 tokens/step; lost to fixed per-step cost so far) | fixed step cost | +5-10 % conditional | low |
+
+Together D1-D5 as estimated: ~26 -> ~21 ms per step, ~+20-25 % (~70 t/s short). Also: AUX1 hard freeze
+2026-11-01 09:23 during heavy server-restart churn - check reproducibility before stress runs; prefer A/Bs inside
+one server instance; move the route log's fp32 -> fp16 conversion off the decode thread (~2 % of its time).
+
+### Prefill (at 100 W both cards sit at the power limit: only less work / energy helps - memory note)
+
+Split (7.2k, 2026-10-20): dense EXL3 GEMM 43 %, MoE GEMM 42 %, flash attention 10 %; attention grows with depth
+(10k ~530 vs 116k ~311 t/s).
+
+| # | step | est. gain | effort |
+|---|---|---|---|
+| P1 | Register-decoded prefill GEMM (research-actions #6: decode each 16x16 tile once, share across a quad by DPP, B from LDS) - fewer decode ops per FMA, i.e. less energy per token | +10-20 % prefill | ~1 week |
+| P2 | Fold the mul1 affine in the prefill GEMM (research-actions #7; decode already folds, KL 0.00014) - one FMA per weight less | +3-6 % (est.) | ~1 day + KL gate |
+| P3 | Win back the placement cost: the corpus hot set + JI_TP_DUP=0 cost prefill 2-5 %; let prefill use its own split / ownership | +2-5 % | low-medium |
+| P4 | MTP's share of prefill (item 23 measured ~10 % at long prompts): check whether prompt positions produce per-position outputs (logits / nextn rows) beyond the JI_MTP_PF_WIN window, cut what the draft head does not need | up to ~5-10 % on long prompts (verify first) | low to check |
+| P5 | Long-context prefill attention: sparse prefill budget / 32-key sub-pages (item 17), cheaper KVarN seal | depth-dependent, larger at 100k+ | medium, KL-gated |
+| P6 | Two-card exchange over card B's PCIe 2.0 x4: smaller wire format (8-bit exchange already +3 %), overlap | +2-5 % | medium |
+| P7 | v_sad_u8 (side Mesa; research-actions #5) - fewer ops per weight in the GEMM decode stage too | a few % | 2-3 days + Mesa build |
+| - | Hardware (not software): x8/x8 lanes for card B, est. +15-20 % two-card prefill; >100 W is excluded by the user | - | - |
+
 ## Tier 0 - hours (config, env knobs, already-written code awaiting a run)
 
 | # | Path | Status | Expected gain | Cost / risk |
