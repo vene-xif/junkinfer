@@ -2100,3 +2100,32 @@ Sparse page metadata rebuild in `attn_kvr6` was expensive (3136-6272 global read
 1. **K6V5 / K6V4 asymmetric variants** (user-approved): expected ~3.5 % more context per GB for dense 27B models (KVarN budget moves from K=6 to V=4 or vice versa; requires separate decode paths and axis transforms).
 2. **Optional: sparse decode LS page-list cache in `attn_hm` (q8):** page metadata rebuild in sparse attention consumes work also in q8 (3-4 % of prefill); the same LDS cache technique may give a few percent.
 
+
+## 2026-11-01 — Routing traces, expert prefetch (no gain), TP2 placement fix, write-through fill (engine 747e1b5..7efbc5d)
+
+**Gains (Sage-A1.5 TP2, 4 x 1100 greedy tokens, two server instances per config): decode short 52.3 -> 58.1 t/s
+(+11 %), 116k (saved state) 37.9 -> 39.9 t/s (+5 %); prefill ~10k tokens 549 -> ~530 t/s (-3 %, placement).**
+
+- Routing traces (JI_ROUTE_LOG, on in production): in TP2 the primary logged -2 for the helper's selections (26 %);
+  router_fused now keeps them in `wanted` as -16 - id (747e1b5). Old traces: ids recomputed exactly from the logged x.
+  Copies + router weights on VENE `/mnt/chonker/projects/junkinfer/data`; `tools/routes/sim_cache.py` (cache
+  policies, Belady, router lookahead, write-through), `tools/routes/mkhot.py` (TP hot set from traces).
+- Router lookahead (layer L+D's router on layer L's MoE input): recall of the true top-8 in the predicted top-8
+  0.80 / 0.73 / 0.68 for D = 1 / 2 / 3.
+- Prefetch (JI_PREFETCH=<B>, opt-in, 93c93f0): misses per 2-token step 43 -> 20 as simulated, decode unchanged.
+  JI_TP_GPROF (primary): routed-expert calls 9.3 of 23.2 ms/token, 77 us per call with a miss vs ~34 us all-hit; a
+  miss is ~1 MB over PCIe at ~14 GB/s - bandwidth-bound, and the prefetch copies share the link at the same time.
+  CP-DMA chunked copies and a 2-workgroup copy shader (la_copy, JI_COPY_WG) were slower. One TP2 "sync 0 lost" abort
+  with JI_PREFETCH=4 (not reproduced). Conclusion: count PCIe bytes per token, not latency.
+- TP2 placement: the old Sage hot set matched the native model's routing poorly (corr 0.19, helper share 27 %);
+  JI_TP_DUP 0.25 duplicated ~540 experts while the helper idled 7-10 ms per step. New default (ee84f72): hot set
+  from a 24-prompt corpus (ref/tp/tp_hot_sage15_native_corpus24.bin, helper share 43 % on held-out traces),
+  JI_TP_DUP=0: decode 52.3 -> 54.2, 116k 37.9 -> 39.0, prefill -2..-5 %.
+- Write-through fill (7efbc5d, JI_WT default on): router_fused assigns each primary miss a victim slot from a
+  per-step host pool (routing record 384 -> 512 bytes, + fill[32]) and drops the victim from the slot map; x3_mv
+  stores the staged weight batches into it; the host publishes after the step. Async-fill evictions off. Decode
+  54.3 -> 58.1, 116k 38.7 -> 39.9, prefill same, KL 0.00017 = 0.00017. Primary/helper GPU work 16.7 / 16.0 ms (was
+  20.9 / 12.7).
+- Measurement: server instances differ by +-4 t/s (greedy text differs per instance); compare averaged
+  `jde_prof: per token` windows and >= 2 instances. Temperature 0.7 decodes at ~46 t/s vs ~58 greedy: MTP drafts are
+  accepted only on exact match - speculative sampling at T > 0 (research-actions plan item 5) is the next lever.

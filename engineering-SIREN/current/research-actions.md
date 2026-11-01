@@ -58,7 +58,9 @@
    DUP 0.25); decode 52.3 -> 54.2 t/s (2 x 4 x 1100 tokens; server-instance noise is +-4 t/s, read the profiles).
    Depth (116k from a saved state, 4 x 1024 tokens): 37.9 (production) -> **39.0 t/s** (corpus set + DUP=0), 38.6
    (DUP 0.25). **Production default since 2026-11-01** (serve.sh, Sage: `ref/tp/tp_hot_sage15_native_corpus24.bin`,
-   JI_TP_DUP=0). Cost: TP prefill ~10k-token prompts 504 / 549 / 554 -> 478 / 532 / 544 t/s (-2..-5 %, two
+   JI_TP_DUP=0). **Write-through fill done 2026-11-01 (engine 7efbc5d, JI_WT default on)**: decode short 54.3 ->
+   58.1 t/s, 116k 38.7 -> 39.9, prefill unchanged, KL identical; primary/helper work now balanced (16.7 / 16.0 ms).
+   Cost of the placement change: TP prefill ~10k-token prompts 504 / 549 / 554 -> 478 / 532 / 544 t/s (-2..-5 %, two
    instances each agree to 1 %) - the prefill split leans on the old placement; tune separately. Follow-ups: regenerate the hot set from real usage traces from time to time (mkhot.py);
    write-through fill (trace sim: primary PCIe transfers per token 20.9 -> 11.8 at this placement - the separate
    async fills disappear); Belady gap (13.5 -> 4.65 misses) = room for a learned *eviction* predictor.
