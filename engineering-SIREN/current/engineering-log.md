@@ -2127,5 +2127,7 @@ Sparse page metadata rebuild in `attn_kvr6` was expensive (3136-6272 global read
   54.3 -> 58.1, 116k 38.7 -> 39.9, prefill same, KL 0.00017 = 0.00017. Primary/helper GPU work 16.7 / 16.0 ms (was
   20.9 / 12.7).
 - Measurement: server instances differ by +-4 t/s (greedy text differs per instance); compare averaged
-  `jde_prof: per token` windows and >= 2 instances. Temperature 0.7 decodes at ~46 t/s vs ~58 greedy: MTP drafts are
-  accepted only on exact match - speculative sampling at T > 0 (research-actions plan item 5) is the next lever.
+  `jde_prof: per token` windows and >= 2 instances. Temperature: same instance, 2 x 1100 tokens each, T 0 / 0.7 / 1.0
+  = 58.5 / 58.2 / 56.5 t/s, draft acceptance 0.94 / 0.92 / 0.87 - the fork already drafts at the target temperature
+  and verifies by rejection sampling (common_sampler_sample_and_accept_n_rejection); research-actions plan item 5 is
+  covered. (A first request after a restart is slower: the expert cache is cold.)

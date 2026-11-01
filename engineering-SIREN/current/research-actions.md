@@ -64,7 +64,8 @@
    instances each agree to 1 %) - the prefill split leans on the old placement; tune separately. Follow-ups: regenerate the hot set from real usage traces from time to time (mkhot.py);
    write-through fill (trace sim: primary PCIe transfers per token 20.9 -> 11.8 at this placement - the separate
    async fills disappear); Belady gap (13.5 -> 4.65 misses) = room for a learned *eviction* predictor.
-5. MTP speculative sampling at temperature > 0 (action #3).
+5. ~~MTP speculative sampling at temperature > 0 (action #3)~~ - already in the fork (draft sampled at the target
+   temperature, rejection-sampling verify); measured 2026-11-01: T 0.7 58.2 vs greedy 58.5 t/s, acceptance 0.92 / 0.94.
 6. **Learned lookahead predictor on the hidden state** (not the KV cache): a small network trained on the traces to
    predict experts several layers / tokens ahead, compared against the routers' own lookahead on the same traces.
    (User: the router is optimized for the current token only - a predictor trained for multi-step lookahead may win.)
