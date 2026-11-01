@@ -162,3 +162,16 @@ Reported for Qwen3.8-Flash-Next (the "Qwen4 preview") and expected in Qwen4:
 - **MTP with IndexShare** (draft steps reuse the target's selected blocks; <= 4 draft tokens).
 - None of this changes dense-27B prefill FLOPs (FFN-bound): QSA makes long-context attention cheap, not the FFN.
   An MoE tier (e.g. a 35B-A3B successor) remains the right target for this box.
+
+## Report D (2026-11-01, "Beyond Tensor Parallelism ... asymmetric Polaris GPUs") - checked, nothing new to act on
+
+| idea | status here |
+|---|---|
+| Backbone on card A, card B as stateless expert worker (AFD / NOVA / Janus) | card B idles during the backbone unless GDN projections are sharded again (= the syncs return); TP2 already balanced 16.7 / 16.0 ms; the one-card-per-half form is research bet R1 (open-paths) |
+| CPU computes spilled experts in an AVX2 format (ATSInfer / Apex / TriMoE) | CPU sharing of misses measured no gain (engineering-log); needs a second CPU-format expert copy (re-quantization, ~4 GB RAM next to 16 GB pinned); misses are ~12/token after write-through |
+| Shared-expert overlap (ScMoE zero-train form) | shared expert already runs beside the routed experts; router overlap JI_OVL_ROUTER measured no gain (61.57 vs 61.17); ScMoE proper needs fine-tuning |
+| Decode-once-reuse for MTP verify (Proteus) | done: x3_mv NT=2..4 decodes once per weight; MoE GROUP variant tried, slower (LDS occupancy); 2 drafts/step now default (62.9 vs 59.6 t/s) |
+| Sequence-split KV across both cards (ZINC split-KV) | TP2 already splits attention by kv head (each card scans one of the two heads: both cards' bandwidth pooled) |
+| Flex / Morph prefill-gated layer selection | needs gate training |
+
+Its step-time table (107-154 t/s) is an idealised model (8 ms of trellis compute for 3.2B weights over two cards, 25 us syncs) that does not match the measured 23 ms GPU + ~2.5 ms host per 2-token step.
