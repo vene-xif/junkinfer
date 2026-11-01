@@ -1,0 +1,14 @@
+# System power / state logger (scripts/power_log.py): logs/power.log every 0.5 s with fsync, for diagnosing sudden
+# power-offs. Root: the RAPL CPU energy counter is root-only. Install: scripts/power_log_install.sh
+[Unit]
+Description=JunkInfer power / state logger
+After=systemd-modules-load.service
+
+[Service]
+ExecStart=/usr/bin/python3 /home/vene/junkinfer/scripts/power_log.py
+Nice=-5
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

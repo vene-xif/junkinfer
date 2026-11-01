@@ -9,7 +9,7 @@ mkdir -p "$L"
 while true; do
   line="$(date '+%F %T')"; hot=0
   for c in /sys/class/drm/card[0-9]; do h=$(ls -d $c/device/hwmon/hwmon* 2>/dev/null | head -1); [ -n "$h" ] || continue
-    t=$(( $(cat $h/temp1_input)/1000 )); p=$(( $(cat $h/power1_average 2>/dev/null || echo 0)/1000000 ))
+    t=$(( $(cat $h/temp1_input)/1000 )); p=$(( $(cat $h/power1_input 2>/dev/null || cat $h/power1_average 2>/dev/null || echo 0)/1000000 ))
     line="$line $(basename $c):${t}C/$(cat $h/fan1_input)rpm/${p}W"; [ $t -ge $LIMIT ] && hot=1; done
   echo "$line" >> "$L/thermal.log"
   if [ $hot = 1 ]; then echo "$(date '+%F %T') LIMIT $LIMIT reached - stopping" >> "$L/thermal.log"
