@@ -33,7 +33,9 @@ fi
 export JI_KVARN=${JI_KVARN:-1}
 # 2026-10-31: routing traces of every decoded token for the expert-prefetch work (tools/routes/read_trace.py); on the
 # HDD, ~165 KB per token until JI_ROUTE_LOG_MAX_GB (150), then ~1 KB; JI_ROUTE_LOG= (empty) turns it off; no speed cost
-export JI_ROUTE_LOG=${JI_ROUTE_LOG-/home/vene/traces}
+# 2026-11-01: OFF by default - logging cost 10-15 % decode (host gap 2.6 -> 3.7-10 ms per step, also with the file
+# writes on a background thread); ~100k traced tokens collected. JI_ROUTE_LOG=/home/vene/traces turns it back on
+export JI_ROUTE_LOG=${JI_ROUTE_LOG-}
 [ -n "$JI_ROUTE_LOG" ] && mkdir -p "$JI_ROUTE_LOG"
 echo "serve_boot: KV cache $([ "$JI_KVARN" != 0 ] && echo KVarN-6 || echo q8_0)"
 exec scripts/serve.sh "$@"
