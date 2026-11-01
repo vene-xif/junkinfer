@@ -144,8 +144,11 @@ def main():
             D = int(p[2:]) if p != "cur" else 0
             res[p] = sim_cur(T, nl, ne, a.C, acc_keys, owner, keyarr, own,
                              None if D == 0 else (pred[D] if p.startswith("la") else None), D, a.B, oracle=p.startswith("or"), ids=ids)
-    for p in [q for q in pol if q.startswith("wt")]:   # wt<decay>[p<pool>][la<D>|or<D>], e.g. wt0.98p64la1
+    for p in [q for q in pol if q.startswith("wt")]:   # wt<decay>[p<pool>][la<D>|or<D>][f<N>], e.g. wt0.98p64la1
         body, la = p[2:], None
+        fut = 0
+        if "f" in body:   # f<N>: victims prefer experts not used in the next N records (perfect N-token lookahead)
+            body, fs = body.split("f"); fut = int(fs)
         for tag in ("la", "or"):
             if tag in body:
                 body, D = body.split(tag); la = (tag, int(D))
@@ -154,7 +157,7 @@ def main():
         if la:
             P = pred[la[1]] if la[0] == "la" else "oracle"
         res[p] = sim_wt(T, nl, ne, a.C, acc_keys, owner, float(dec or 0.98), int(pool or 64),
-                        pred=P, D=la[1] if la else 0, B=a.B, keyarr=keyarr, own=own)
+                        pred=P, D=la[1] if la else 0, B=a.B, keyarr=keyarr, own=own, fut=fut)
     if "lru" in pol:
         res["lru"] = sim_lru(acc_keys, a.C)
     if "opt" in pol:
@@ -228,7 +231,7 @@ def sim_cur(T, nl, ne, C, acc_keys, owner, keyarr, own, pred, D, B, oracle=False
     return {"miss": miss, "fill": fill, "pf": pf, "pfuse": pfuse}
 
 
-def sim_wt(T, nl, ne, C, acc_keys, owner, decay, pool, pred=None, D=0, B=0, keyarr=None, own=None):
+def sim_wt(T, nl, ne, C, acc_keys, owner, decay, pool, pred=None, D=0, B=0, keyarr=None, own=None, fut=0):
     """write-through fill: the zero-copy miss kernel also stores the expert into a victim slot (no extra PCIe
     traffic). Victims: the `pool` lowest-scored residents picked at the start of each token (the GPU takes them in
     order, misses beyond the pool stay plain zero-copy); scores as the engine's (decay, +1 per access)."""
@@ -239,13 +242,22 @@ def sim_wt(T, nl, ne, C, acc_keys, owner, decay, pool, pred=None, D=0, B=0, keya
     pfflag = np.zeros(N, bool)
     prim = owner == 0
     nres = 0
+    nxt = None
+    if fut:   # next record index each key is used at (for the lookahead oracle)
+        nxt_use = np.full(N, 1 << 30, np.int64); nxt = np.empty(T, object)
+        for t in range(T - 1, -1, -1):
+            nxt[t] = nxt_use.copy() if t % 1 == 0 else None
+            for ks in acc_keys[t]: nxt_use[ks] = t
     for t in range(T):
         rk = np.flatnonzero(cached)
         free = C - nres
         if len(rk) and pool > free:
             q = min(pool - free, len(rk))
-            vic = list(rk[np.argpartition(score[rk], q - 1)[:q]]) if q < len(rk) else list(rk)
-            vic.sort(key=lambda k: score[k])
+            sc = score[rk].copy()
+            if fut:   # used within the next fut records: never a victim before the unused ones
+                sc = sc + (nxt[t][rk] <= t + fut) * 1e6
+            vic = list(rk[np.argpartition(sc, q - 1)[:q]]) if q < len(rk) else list(rk)
+            vic.sort(key=lambda k: sc[np.searchsorted(rk, k)])
         else:
             vic = []
         vi = 0

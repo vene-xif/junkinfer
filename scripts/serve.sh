@@ -79,6 +79,10 @@ elif [ "${JI_TP:-0}" != 0 ]; then
   # MTP speculative decoding: JI_MTP=1 (below).
   JI_GPU=all
   export JI_TP GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
+  # decoding thread on CPU 1, TP relay (spins on the sync markers) on CPU 2: same CCX, separate physical cores
+  # (Ryzen 5 2600: CPUs 0-2 / 3-5 = CCX 0 / 1, 6-11 their SMT siblings). Unpinned, instances decoded 53.9-58.3 t/s
+  # depending on where the scheduler put the two threads; pinned 57.8-58.5 (2026-11-01). JI_PIN= (empty): off
+  export JI_PIN=${JI_PIN-1,2}
   # hot set = routing counts of the served model (JI_ROUTE_DUMP + tools/aux-jt/routegen.py 400): Sage-A1.5 routes
   # differently from Qwen3.6 (top-80 per layer overlap 36 %)
   # 2026-11-01 Sage-A1.5: hot set from the routing traces of a 24-prompt corpus (tools/routes/mkhot.py, ~19k decoded
@@ -132,7 +136,7 @@ if [ "${JI_ENGINE:-jde}" = jde ]; then
     # 43.1 / 62.2 / 51.9 .. 47.6 / 63.7 / 55.9 .. 43.7 / 61.5 / 51.7 t/s), the Qwen3.6 sidecar 0.5
     if [ -d "$MODEL" ]; then DEF_MTP="$MODEL::mtp"; DEF_PMIN=0.8; else DEF_MTP="$(dirname "$MODEL")/mtp-IQ4_NL.v2.gguf"; DEF_PMIN=0.5; fi
     MTP_ARGS=(-md "${JI_MTP_MODEL:-$DEF_MTP}" --spec-type draft-mtp -ngld 0 -devd none
-              --no-spec-draft-backend-sampling --spec-draft-n-max 1 --spec-draft-p-min "${JI_MTP_PMIN:-$DEF_PMIN}")
+              --no-spec-draft-backend-sampling --spec-draft-n-max "${JI_MTP_NMAX:-1}" --spec-draft-p-min "${JI_MTP_PMIN:-$DEF_PMIN}")
   fi
   exec "$ENGINE/llama-server" -m "$MODEL" \
     -ngl 99 "${EXPERT_ARGS[@]}" --no-repack --load-mode none -fa on --fit off \
