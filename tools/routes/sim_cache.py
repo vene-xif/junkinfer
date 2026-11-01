@@ -134,6 +134,11 @@ def main():
     pol = a.policies.split(",")
     res = {}
     acc_keys = [[keyarr[t, L][own[t, L] == 0] for L in range(nl)] for t in range(T)]
+    for p in [q for q in pol if q.startswith("cur") and q != "cur"]:   # cur<decay>e<evict>[h<hyst>], e.g. cur0.95e16
+        body, _, hy = p[3:].partition("h")
+        dec, _, ev = body.partition("e")
+        res[p] = sim_cur(T, nl, ne, a.C, acc_keys, owner, keyarr, own, None, 0, 0, decay=float(dec or 0.98),
+                         swaps_evict=int(ev or 8), hyst=float(hy or 1.25))
     if "cur" in pol or any(p.startswith(("la", "or")) for p in pol):
         for p in [q for q in pol if q == "cur" or q.startswith(("la", "or"))]:
             D = int(p[2:]) if p != "cur" else 0

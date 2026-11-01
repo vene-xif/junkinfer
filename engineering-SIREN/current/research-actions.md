@@ -37,9 +37,26 @@
    Reading: prefetch trades ~2 copies per avoided miss, but the copies run on otherwise idle PCIe time (misses are
    ~25 % of a step); write-through fill is free traffic and beats the engine's policy; the oracle row bounds what a
    learned predictor (step 6) can add on top of the router lookahead. MTP-draft prefetch not simulated yet.
-4. **Router-lookahead expert prefetch**: predicted misses copied into cache slots by the async fill queue (DMA)
-   1-2 layers ahead (a layer ~0.5 ms; an expert ~0.13 ms over x16), plus MTP-draft token prefetch. Estimated
-   +15-30 % decode (bounded by miss bytes / PCIe bandwidth; decode is ~16 ms experts of ~20 ms per token).
+4. **Router-lookahead expert prefetch - built, no gain (2026-11-01, engine 93c93f0, `JI_PREFETCH=<B>` opt-in)**:
+   per layer the GPU copies x_L to host memory + a marker; the host applies layer L+1's router (AVX2) and copies up
+   to B predicted primary misses into victim slots of finished layers on the fill queue. Real misses per 2-token
+   step 43 -> 20, exactly as simulated, but primary GPU work 19.0 -> 20.2 ms/token and decode 54.2 -> 53.7 t/s.
+   Why (JI_TP_GPROF, primary, 23.2 ms/token): routed-expert calls 9.3 ms (77 us each vs ~34 us all-hit); a call with
+   a miss is **PCIe-bandwidth-bound** (~1 MB at ~14 GB/s per missed expert), and RADV runs the prefetch copies as
+   compute copies on the same link at the same time - moving bytes, not removing them. Also tried: chunked copies
+   (< 4 KB regions = CP DMA): slower (46-51 t/s); a 2-workgroup copy shader (`la_copy`, `JI_COPY_WG`): too slow
+   for the regular cache fills (25-40 t/s). One TP2 "sync 0 lost" abort with JI_PREFETCH=4 (not reproduced).
+   Only PCIe bytes per token matter on the primary -> the levers are fewer misses (cache capacity / placement,
+   write-through fill instead of separate fills) and copies only in PCIe-idle windows.
+   **Found on the way: the TP2 placement was wrong.** The helper's hot set (`ref/tp/tp_hot_sage15_exl3.bin`) matches
+   the native Sage routing poorly (correlation 0.19; its 2269 experts carry 27 % of the traced selections, a
+   trace-derived set 45-64 %), and the 538 experts duplicated on both GPUs (JI_TP_DUP 0.25) take primary cache slots
+   while the helper idles 7-10 ms per step (primary work 19.7-20.9 ms vs helper 12.7). Measured (GPU time per step,
+   first..last sync): old set 22.8 ms, old + JI_TP_DUP=0 21.75, trace set 21.65, trace set + DUP=0 **20.35** (-11 %).
+   Held-out check (hot set from a 24-prompt corpus, `tools/routes/mkhot.py`, ~19k tokens; measured on the 4 A/B
+   prompts not in it): JDE ms per step 25.3 (production) -> 23.8 (corpus set + JI_TP_DUP=0, -6 %), 24.9 (corpus set,
+   DUP 0.25); decode 52.3 -> 54.2 t/s (2 x 4 x 1100 tokens; server-instance noise is +-4 t/s, read the profiles).
+   Depth check pending (DUP was 0.25 for balance at depth).
 5. MTP speculative sampling at temperature > 0 (action #3).
 6. **Learned lookahead predictor on the hidden state** (not the KV cache): a small network trained on the traces to
    predict experts several layers / tokens ahead, compared against the routers' own lookahead on the same traces.
