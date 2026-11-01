@@ -81,7 +81,15 @@ elif [ "${JI_TP:-0}" != 0 ]; then
   export JI_TP GGML_VK_HOST_DEVICE=${GGML_VK_HOST_DEVICE:-1}
   # hot set = routing counts of the served model (JI_ROUTE_DUMP + tools/aux-jt/routegen.py 400): Sage-A1.5 routes
   # differently from Qwen3.6 (top-80 per layer overlap 36 %)
-  case "$DEF_ALIAS" in sage-a1.5) HOTF=tp_hot_sage15_exl3.bin ;; *) HOTF=tp_hot_qwen36_exl3.bin ;; esac
+  # 2026-11-01 Sage-A1.5: hot set from the routing traces of a 24-prompt corpus (tools/routes/mkhot.py, ~19k decoded
+  # tokens; the old tp_hot_sage15_exl3.bin matched the native model's routing poorly: its 2269 helper experts carried
+  # 27 % of the traced selections, this set 43 % on held-out traces) and no experts on both cards (JI_TP_DUP=0: the
+  # 0.25 share took ~540 primary cache slots while the helper idled 7-10 ms per step). Primary misses per token
+  # 24.6 -> 13.5 (trace simulation), JDE ms per step 25.3 -> 23.8, decode short 52.3 -> 54.2, 116k 37.9 -> 39.0 t/s
+  case "$DEF_ALIAS" in
+    sage-a1.5) HOTF=tp_hot_sage15_native_corpus24.bin; export JI_TP_DUP=${JI_TP_DUP:-0} ;;
+    *) HOTF=tp_hot_qwen36_exl3.bin ;;
+  esac
   export JI_TP_HOT=${JI_TP_HOT:-$(cd "$(dirname "$0")/.." && pwd)/ref/tp/$HOTF}
   EXPERT_ARGS=(-dev Vulkan1 --cpu-moe)
 fi

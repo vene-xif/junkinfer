@@ -56,7 +56,11 @@
    Held-out check (hot set from a 24-prompt corpus, `tools/routes/mkhot.py`, ~19k tokens; measured on the 4 A/B
    prompts not in it): JDE ms per step 25.3 (production) -> 23.8 (corpus set + JI_TP_DUP=0, -6 %), 24.9 (corpus set,
    DUP 0.25); decode 52.3 -> 54.2 t/s (2 x 4 x 1100 tokens; server-instance noise is +-4 t/s, read the profiles).
-   Depth check pending (DUP was 0.25 for balance at depth).
+   Depth (116k from a saved state, 4 x 1024 tokens): 37.9 (production) -> **39.0 t/s** (corpus set + DUP=0), 38.6
+   (DUP 0.25). **Production default since 2026-11-01** (serve.sh, Sage: `ref/tp/tp_hot_sage15_native_corpus24.bin`,
+   JI_TP_DUP=0). Follow-ups: regenerate the hot set from real usage traces from time to time (mkhot.py);
+   write-through fill (trace sim: primary PCIe transfers per token 20.9 -> 11.8 at this placement - the separate
+   async fills disappear); Belady gap (13.5 -> 4.65 misses) = room for a learned *eviction* predictor.
 5. MTP speculative sampling at temperature > 0 (action #3).
 6. **Learned lookahead predictor on the hidden state** (not the KV cache): a small network trained on the traces to
    predict experts several layers / tokens ahead, compared against the routers' own lookahead on the same traces.
