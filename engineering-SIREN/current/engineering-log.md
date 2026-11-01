@@ -2131,3 +2131,23 @@ Sparse page metadata rebuild in `attn_kvr6` was expensive (3136-6272 global read
   = 58.5 / 58.2 / 56.5 t/s, draft acceptance 0.94 / 0.92 / 0.87 - the fork already drafts at the target temperature
   and verifies by rejection sampling (common_sampler_sample_and_accept_n_rejection); research-actions plan item 5 is
   covered. (A first request after a restart is slower: the expert cache is cold.)
+
+## 2026-11-01 (later) — Thread pinning, draft length, eviction bound (engine 87f4606, docs 9627895)
+
+**Gain: decode short 55.8 (mean of unpinned instances, 53.9-58.3) -> 58.3 t/s (57.8-58.5), prefill unchanged.**
+
+- Server instances differed by up to 10 % at identical JDE GPU time per step: the host gap between target decode
+  calls (sampling, MTP draft, bookkeeping) was 2.6 ms in fast instances, 3.4-8 ms in slow ones (JI_DEC_PROF). The
+  TP relay thread spins on the sync markers; where the scheduler put it relative to the decoding thread (SMT sibling,
+  other CCX) decided the mode. JI_PIN=1,2 (serve.sh default for TP2): decoding thread CPU 1, relay CPU 2. Pinning
+  only inside jde_decode was not enough (58.9 / 53.2). Threads started later inherit the one-CPU mask (JDE's worker
+  pool): swept back to the original mask every 1000 calls.
+- MTP draft length 2 (JI_MTP_NMAX=2): 2.37 vs 1.95 tokens per step, JDE step 25.5 vs 23.3 ms; decode 55.3 vs 53.9
+  and 55 vs 58.4 / 52.6 in the noisy unpinned instances - not shown to help; default stays 1. Per-request
+  `speculative.n_max` is ignored by the server (capped at the launch value).
+- Learned eviction bound (sim_cache wt...f<N>: victims avoid experts used in the next N tokens, perfect knowledge):
+  misses per token 11.76 (write-through now) -> 11.51 / 10.85 / 9.07 / 6.94 for N = 4 / 16 / 64 / 256, Belady 4.65.
+  A hidden-state predictor would have to see 64-256 tokens ahead to matter, and with primary / helper work balanced
+  (16.7 / 16.0 ms) primary misses barely shorten the step any more: deprioritised.
+- AUX1 went off the network during the pinning validation (instance 2 of 3, ~09:20); cause unknown at the time of
+  writing (check `journalctl -b -1`, ji-thermal-guard).
