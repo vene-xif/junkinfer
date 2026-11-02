@@ -1,0 +1,16 @@
+# Undervolt both RX 580s (scripts/undervolt.sh) before the model server starts.
+# install: sudo cp scripts/ji-undervolt.service /etc/systemd/system/ && sudo systemctl daemon-reload &&
+#          sudo systemctl enable ji-undervolt   (status/values: journalctl -u ji-undervolt)
+[Unit]
+Description=JunkInfer RX 580 undervolt
+After=systemd-udev-settle.service ji-fancurve.service
+Before=junkinfer.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 5
+ExecStart=/home/vene/junkinfer/scripts/undervolt.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -2151,3 +2151,16 @@ Sparse page metadata rebuild in `attn_kvr6` was expensive (3136-6272 global read
   (16.7 / 16.0 ms) primary misses barely shorten the step any more: deprioritised.
 - AUX1 went off the network during the pinning validation (instance 2 of 3, ~09:20); cause unknown at the time of
   writing (check `journalctl -b -1`, ji-thermal-guard).
+
+## 2026-11-01/02 — Undervolt (both RX 580s, 100 W cap unchanged)
+
+- Any OverDrive voltage edit disables AVFS (smu7_update_avfs), so "stock table minus X" can be worse than stock;
+  the top memory level's mV (OD_MCLK m 2) is the core VDDC floor; and the kernel only uploads sclk voltage edits
+  when an sclk clock also changed (smu7_check_dpm_table_updated returns early on a changed memory-level
+  voltage) - scripts/undervolt.sh nudges state 7 by 1 MHz and back.
+- Sweeps with bit-exact GEMM stress (lab/mmbench MB_STRESS, tools/uv/): card1 fails at 875 mV (<= 1200 MHz) and
+  1025 mV (1360 MHz); card0 at 825 / 975. Final (>= 2 steps margin): card0 875 / 1025, card1 925 /
+  975-1000-1050-1075. Boot service ji-undervolt (enabled on AUX1).
+- KL (Sage TP2, L_code r0): decode tail 0.00017 = stock; prefill tail 0.00021 (stock 0.00019, earlier engine).
+- Same-instance server A/B (job_uvtps): decode 59.4 -> 64.5 t/s (+8.5 %), prefill ~10k 512 -> 578 t/s (+11.5 %).
+- AUX1 powered off at 20:29:55 during the A/B's stock-voltage phase (GPU+CPU 231-245 W) - not the undervolt.

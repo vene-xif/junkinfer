@@ -16,6 +16,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <chrono>
 #define VK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s failed: %d (line %d)\n", #x, r_, __LINE__); exit(1); } } while (0)
 
 static int envi(const char * n, int d) { const char * v = getenv(n); return v ? atoi(v) : d; }
@@ -176,12 +177,13 @@ int main(int argc, char ** argv) {
         for (size_t k = 0; k < nk; ++k) { R[k][0] = nt[k]; upload(bR[k], R[k].data(), rmw * 4); }
         P = {T, tot, nt};
     };
-    auto record = [&](const std::vector<VkPipeline> & ks, const Plan & P, bool ts) {
+    auto record = [&](const std::vector<VkPipeline> & ks, const Plan & P, bool ts, int reps_in_cb = 1) {
         VkCommandBufferBeginInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; vkResetCommandBuffer(cb, 0); vkBeginCommandBuffer(cb, &cbi);
         vkCmdFillBuffer(cb, bD.b, 0, VK_WHOLE_SIZE, 0);
         VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER}; mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT; mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
         if (ts) { vkCmdResetQueryPool(cb, qp, 0, 2); vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 0); }
+        for (int rr = 0; rr < reps_in_cb; ++rr)   // MB_STRESS: the batch repeated back to back (same outputs rewritten)
         for (size_t h = 0; h < ks.size(); ++h) {
             const uint32_t nt = P.nt[h];
             if (nt == 0) continue;
@@ -214,6 +216,36 @@ int main(int argc, char ** argv) {
         printf("variant %d:", v);
         for (auto & k : ks) { std::string st; PK[v].push_back(make(k.second.c_str(), st)); LIM[v].push_back(k.first); printf(" %s (<= %u rows)%s%s", k.second.c_str(), k.first, st.empty() ? "" : " ", st.c_str()); }
         printf("\n");
+    }
+    // MB_STRESS=<seconds> (undervolt validation, 2026-11-01): variant 0 at the largest T, a reference output first, then
+    // command buffers of MB_STRESS_REP back-to-back batches until the time is up; every output is compared bit for bit
+    // with the reference (the kernel is deterministic: any difference is a compute error). Exit code 2 on a mismatch.
+    if (const int stress_s = envi("MB_STRESS", 0); stress_s > 0) {
+        const uint32_t T = TMAX;
+        route(T);
+        Plan P; build(T, LIM[0], P);
+        record(PK[0], P, false);
+        const size_t n = (size_t) T * NU * M;
+        std::vector<float> ref((const float *) bDh.map, (const float *) bDh.map + n);
+        int nonfinite = 0; for (float x : ref) nonfinite += !std::isfinite(x);
+        const int rep = envi("MB_STRESS_REP", 30);
+        const double us1 = record(PK[0], P, true, rep);
+        printf("stress: T %u, %d batches per submit (%.1f ms), reference nonfinite %d\n", T, rep, us1 / 1e3, nonfinite);
+        fflush(stdout);
+        if (memcmp(ref.data(), bDh.map, n * 4) != 0) { printf("STRESS MISMATCH on the first repeat\n"); return 2; }
+        const auto t0 = std::chrono::steady_clock::now();
+        long iters = 0, bad = 0;
+        while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < stress_s) {
+            record(PK[0], P, false, rep);
+            const float * d = (const float *) bDh.map;
+            long nb = 0;
+            if (memcmp(d, ref.data(), n * 4) != 0) for (size_t i = 0; i < n; ++i) nb += memcmp(&d[i], &ref[i], 4) != 0;
+            ++iters; bad += nb;
+            if (nb) { printf("STRESS MISMATCH iter %ld: %ld values differ\n", iters, nb); fflush(stdout); }
+            if (iters % 20 == 0) { printf("stress %.0f s: %ld submits, %ld bad values\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), iters, bad); fflush(stdout); }
+        }
+        printf("STRESS DONE: %ld submits (%ld batches), %ld bad values\n", iters, iters * rep, bad);
+        return bad ? 2 : 0;
     }
     const int reps = envi("MB_REPS", 7);
     for (uint32_t T : Ts) {
