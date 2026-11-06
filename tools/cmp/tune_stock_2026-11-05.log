@@ -1,0 +1,9 @@
+cards 1 ncmoe 40 cache 5000 :: decode 18.79 t/s, prefill 5448 tok 229.0 t/s
+cards 1 ncmoe 34 cache 3000 :: decode 16.31 t/s, prefill 5448 tok 230.6 t/s
+cards 1 ncmoe 30 cache 1500 :: decode 2.59 t/s, prefill 5448 tok 165.8 t/s
+cards 1 ncmoe 28 cache 500 :: decode 10.68 t/s, prefill 5448 tok 230.2 t/s
+cards 2 ncmoe 40 cache 11000 :: decode 23.65 t/s, prefill 5448 tok 109.0 t/s
+cards 2 ncmoe 24 cache 5000 :: decode 7.31 t/s, prefill 5448 tok 157.6 t/s
+cards 2 ncmoe 16 cache 2000 :: decode 7.64 t/s, prefill 5448 tok 161.6 t/s
+cards 2 ncmoe 12 cache 500 :: decode 5.64 t/s, prefill 5448 tok 161.6 t/s
+TUNE_DONE
